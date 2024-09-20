@@ -146,8 +146,6 @@ void Disable_UART(tUART * UART){
 }
 
 
-
-void Disable_UART(tUART * Bus);
 int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size);
 int8_t UART_Recieve(tUART * UART, uint8_t * Data, uint8_t Data_Size);
 void Modify_UART_Baudrate(tUART * UART, int32_t New_Baudrate);

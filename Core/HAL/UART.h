@@ -61,4 +61,4 @@ void UART_Flush_TX(tUART * UART);
 }
 #endif
 
-#endif /* UART_UART_H_ */
+#endif // UART_UART_H_ 

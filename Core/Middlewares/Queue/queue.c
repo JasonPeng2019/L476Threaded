@@ -9,7 +9,7 @@
 #include "queue.h"
 
 Node * Create_Node(void * data);
-void Free_Node(Node * node);
+uint32_t Free_Node(Node * node);
 
 /* @brief: creates a dynamically allocated Node;
  *
