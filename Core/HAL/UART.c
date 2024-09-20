@@ -18,8 +18,8 @@ static bool UART_Callbacks_Initialized = false;
 static Queue * UART_Callback_Handles;
 static void UART_Handler(void * Task_Data);
 
-void Init_CallBack_Queue(Queue * Callback_Queue){
-    Prep_Queue(Callback_Queue);
+void Init_UART_CallBack_Queue(void){
+    Prep_Queue(UART_Callback_Handles);
 }
 
 tUART * Init_DMA_UART(UART_HandleTypeDef * UART_Handle){
@@ -144,7 +144,6 @@ void Disable_UART(tUART * UART){
     UART->Currently_Transmitting = false;
     UART->UART_Enabled = false;
 }
-
 
 int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size);
 int8_t UART_Recieve(tUART * UART, uint8_t * Data, uint8_t Data_Size);

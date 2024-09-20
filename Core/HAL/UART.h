@@ -47,7 +47,7 @@ typedef struct {
 
 
 
-void Init_CallBack_Queue(Queue * Callback_Queue);
+void Init_UART_CallBack_Queue(void);
 tUART * Init_DMA_UART(UART_HandleTypeDef * UART_Handle);
 tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(uint8_t*, uint8_t), void * (*Recieve_Func_Ptr)(uint8_t*, uint8_t));
 void Enable_UART(tUART * UART);
