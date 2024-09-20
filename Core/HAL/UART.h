@@ -51,7 +51,7 @@ void Init_CallBack_Queue(Queue * Callback_Queue);
 tUART * Init_DMA_UART(UART_HandleTypeDef * UART_Handle);
 tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(uint8_t*, uint8_t), void * (*Recieve_Func_Ptr)(uint8_t*, uint8_t));
 void Enable_UART(tUART * UART);
-void Disable_UART(tUART * Bus);
+void Disable_UART(tUART * UART);
 int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size);
 int8_t UART_Recieve(tUART * UART, uint8_t * Data, uint8_t Data_Size);
 void Modify_UART_Baudrate(tUART * UART, uint32_t New_Baudrate);

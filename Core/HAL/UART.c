@@ -105,42 +105,46 @@ void UART_Handler(void * UART_tVoid){
 } 
 
 void Enable_UART(tUART * UART){
+	HAL_UART_MspInit(UART->UART_Handle);
+	Prep_Queue(&UART->TX_Queue);
+	UART->TX_Buffer = NULL;
+	UART->Currently_Transmitting = false;
+	UART->RX_Buff_Head_Idx = 0;
+	UART->RX_Buff_Tail_Idx = 0;
+	UART->UART_Enabled = true;
 
-};
+	HAL_UART_Receive_DMA(UART->UART_Handle, UART->RX_Buffer, UART_RX_BUFF_SIZE);
+}
 
 void Disable_UART(tUART * UART){
-    HAL_UART_MspDeInit(UART->UART_Handle);
+    UART_Flush_TX(UART);
+    // if using DMA
+    if (UART->Use_DMA = true){
+        if (UART->UART_Handle->RxState == HAL_UART_STATE_BUSY_RX){
+            // allow all recieving transmissions to go thru
+            printf("func Disable UART: Rx is busy, waiting for RX transmission to finish.\r\n");
+            while (UART->UART_Handle->RxState == HAL_UART_STATE_BUSY_RX){
+                HAL_Delay(1);
+            }
+            // then deactivate the UART DMA immeadiately
+            HAL_UART_DMAStop(UART->UART_Handle);  // Stop the DMA reception
+            printf("func Disable UART: Rx finished. Disabling UART\r\n");
+        }
+        // Deinit the UART
+        HAL_UART_MspDeInit(UART->UART_Handle);
+    }
+    // free the TX Queue and TX Buffer and update the heap usage tracking variable accordingly
     int c = 0;
     for (; c < UART->TX_Queue->Size; c++){
-        Task_Rm_Heap_Usage(UART->Task_ID, UART->TX_Queue->);
+        Task_Rm_Heap_Usage(UART->Task_ID, Free_Queue(UART->TX_Queue));
     }
-    Free_Queue(UART->TX_Queue);
     Task_Free(UART->Task_ID, UART->TX_Buffer->Data);
     Task_Free(UART->Task_ID, UART->TX_Buffer);
-
-
-
-
+    //Update currently transmitting and UART Enabled
+    UART->Currently_Transmitting = false;
+    UART->UART_Enabled = false;
 }
 
-void Enable_UART(UART * Bus)
-{
-	HAL_UART_MspInit(Bus->UART_Handle);
-	Prep_Queue(&Bus->TX_Queue);
-	Bus->TX_Buffer = NULL;
-	Bus->Currently_Transmitting = false;
-	Bus->RX_Buff_Head_Ptr = 0;
-	Bus->RX_Buff_Tail_Ptr = 0;
-	Bus->UART_Is_Enabled = true;
-
-	HAL_UART_Receive_DMA(Bus->UART_Handle, Bus->RX_Buffer, UART_RX_BUFF_SIZE);
-}
-
-void Disable_UART(UART * Bus)
-{
-	HAL_UART_MspDeInit(Bus->UART_Handle);
-	Bus->UART_Is_Enabled = false;
-}
 
 
 void Disable_UART(tUART * Bus);
