@@ -1,0 +1,11 @@
+scheduler.c:24:6:Start_Scheduler	8	static
+scheduler.c:37:6:Run_Scheduler_Tasks	24	static
+scheduler.c:71:10:Start_Task	32	static
+scheduler.c:99:6:Delete_Task	32	static
+scheduler.c:119:6:Resume_Task	24	static
+scheduler.c:132:6:Halt_Task	24	static
+scheduler.c:145:6:Modify_Task_Wait_Time	24	static
+scheduler.c:159:6:Modify_Task_Name	24	static
+scheduler.c:172:14:Return_Scheduler	4	static
+scheduler.c:177:8:Task_Malloc_Data	32	static
+scheduler.c:200:6:Task_Free	32	static

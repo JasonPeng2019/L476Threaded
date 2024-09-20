@@ -1,0 +1,8 @@
+queue.c:20:8:Create_Node	24	static
+queue.c:35:6:Free_Node	24	static
+queue.c:50:6:Prep_Queue	16	static
+queue.c:65:9:Enqeueue	24	static
+queue.c:94:8:Dequeue	24	static
+queue.c:122:6:Dequeue_Free	24	static
+queue.c:138:8:Queue_Peek	24	static
+queue.c:154:8:Node_Peek	24	static

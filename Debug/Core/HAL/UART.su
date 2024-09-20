@@ -1,0 +1,2 @@
+UART.c:21:6:Init_CallBack_Queue	16	static
+UART.c:25:9:Init_DMA_UART	24	static
