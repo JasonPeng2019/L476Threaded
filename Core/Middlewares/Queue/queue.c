@@ -44,7 +44,7 @@ uint32_t Free_Node(Node * node){
 }
 
 
-/* @brief: preps a queue and initializes values
+/** @brief: preps a queue and initializes values
  *
  * @params: queue object to be prepped (must be pre-initialized)
  *
@@ -56,7 +56,7 @@ void Prep_Queue(Queue* que){
 	que->Size = 0;
 }
 
-/*
+/**
  * @brief: load up a node with data (data) into the queue (que)
  *
  * @params: queue object to load new node
@@ -87,7 +87,7 @@ uint8_t Enqeueue(Queue * que, void * data){
 }
 
 
-/*
+/**
  * @brief: dequeue the first item (FIFO) in the queue
  *
  * @params: queue to dequeue
@@ -116,12 +116,13 @@ void * Dequeue(Queue * que){
 	}
 }
 
-/*@brief: dequeue the first item in the queue and free the item as well
-*
-* @params: Queue to dequeue
-*
-* @return: None
-*/
+/**
+ * @brief: dequeue the first item in the queue and free the item as well
+ *
+ * @params: Queue to dequeue
+ *
+ * @return: None
+ */
 void Dequeue_Free(Queue * que){
 	if (que->Size > 0){
 		Node * traq = que->Head;
@@ -132,12 +133,13 @@ void Dequeue_Free(Queue * que){
 }
 
 
-/*@brief: peeks at the [index] item 
-*
-* @params: Queue to peek through
-*
-* @return: Data of queued node. For example, in scheduler, returns task struct
-*/
+/**
+ * @brief: peeks at the [index] item 
+ *
+ * @params: Queue to peek through
+ *
+ * @return: Data of queued node. For example, in scheduler, returns task struct
+ */
 void * Queue_Peek(Queue * que, uint32_t index){
 	if (index < que->Size){
 		Node * travler = que->Head;

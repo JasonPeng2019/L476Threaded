@@ -2,7 +2,9 @@
     "files.associations": {
         "stdlib.h": "c",
         "main.h": "c",
-        "queue.h": "c"
+        "queue.h": "c",
+        "stdbool.h": "c",
+        "stdint.h": "c"
     },
     "C_Cpp.errorSquiggles": "enabled"
 }

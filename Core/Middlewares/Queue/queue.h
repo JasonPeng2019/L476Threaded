@@ -36,7 +36,7 @@ void * Dequeue(Queue * que);
 void Dequeue_Free(Queue * que);
 void * Queue_Peek(Queue * que, uint32_t index);
 Node * Node_Peek(Queue * que, uint32_t index);
-void Free_Queue(Queue * que);
+uint32_t Free_Queue(Queue * que);
 
 #ifdef __cplusplus
 }

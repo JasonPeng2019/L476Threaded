@@ -6,6 +6,9 @@
                 "${workspaceFolder}/**"
             ],
             "defines": [
+                "USE_HAL_DRIVER",
+                "__CC_ARM",
+                "STM32L476xx",
                 "_DEBUG",
                 "UNICODE",
                 "_UNICODE"

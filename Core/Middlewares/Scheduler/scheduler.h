@@ -55,5 +55,7 @@ void * Task_Malloc_Data(uint32_t Task_ID, uint32_t size);
 void Task_Free(uint32_t task_ID, void * data_ptr);
 void Task_Add_Heap_Usage(uint32_t Task_ID, uint32_t data_Size);
 void Task_Rm_Heap_Usage(uint32_t task_ID, uint32_t data_Size);
+void Set_Task_Name(uint32_t task, const char * name);
+void * Null_Task(void * NULL_Ptr);
 
 #endif /* SCHEDULER_SCHEDULER_H_ */

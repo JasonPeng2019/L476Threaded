@@ -1,5 +1,5 @@
 /*
- * UART.h
+ * UART.c
  *
  *  Created on: Sep 19, 2024
  *      Author: jason.peng
@@ -7,21 +7,31 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdbool.h>
 #include <stdio.h>
 
 #include "UART.h"
 #include "../Middlewares/Scheduler/Scheduler.h"
 #include "main.h"
 
-
 static bool UART_Callbacks_Initialized = false;
 static Queue * UART_Callback_Handles;
-static void UART_Handler(void * Task_Data);
+static void UART_Handler(tUART * UART);
 
 void Init_UART_CallBack_Queue(void){
     Prep_Queue(UART_Callback_Handles);
 }
 
+/** 
+ *@brief: malloc a UART, and initialize UART struct members for a UART using DMA. Add it to the callback
+ * handles queue for when you want to do a callback to match it, then start a task for transmitting the 
+ * UART (checking bufer and transmitting accordingly). Updates memory trackers for the UART task, and 
+ * sets up the DMA Access.
+ *
+ * @params: UART_Handle returned from STM32 HAL.
+ * 
+ * @returns: tUART of UART initialized
+*/
 tUART * Init_DMA_UART(UART_HandleTypeDef * UART_Handle){
     //malloc a UART struct
     tUART * UART = (tUART*)malloc(sizeof(tUART));
@@ -55,6 +65,15 @@ tUART * Init_DMA_UART(UART_HandleTypeDef * UART_Handle){
     }
 }
 
+/**
+ *  @brief: Initialize a SUDO UART. mallocs the tUART for the SUDO UART. SUDO UART has no Handle but
+ * updates the other peripherals including the SUDO Transmit and SUDO Recieve functions for the SUDO UART.
+ * Starts a task for checking the UART TX transmissions, adds correct memory usage to that task.
+ *
+ * @params: Transmit function for SUDO UART, Recieve function for SUDO UART
+ * 
+ * @returns: tUART struct initialized and malloc-ed
+ * */
 tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(uint8_t*, uint8_t), void * (*Receive_Func_Ptr)(uint8_t*, uint8_t)){
     tUART * UART = (tUART*)malloc(sizeof(tUART));
     if (UART != NULL){
@@ -76,15 +95,28 @@ tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(uint8_t*, uint8_t), void * (*
     }    
 }
 
-/* handle the TX in the queue accordingly
+/**
+ * @Notes-1: Handle the TX in the queue ONLY.
  * don't need to handle Rx because Rx is polled by tasks running UART (example - polled by console
  * if console is in use)
- * If device is active, then UART is being polled and continuously in use.
- * No long idle periods for UART - program the device and the UART to recieve intermittently
+ * If device is active, then UART is being polled for Rx's and continuously in use.
+ * No long idle periods for UART - program the device and the UART to recieve intermittently, so don't need
+ * to use RX interrupt.
  * 
+ * @Notes-2: Will need to set up interrupt service for LoRA and power on from sleep;
+ * need to turn on device when pinged.
+ * 
+ * *********************************************************************************************
+ * *********************************************************************************************
+ * 
+ * @brief: Handles the TX in the Queue. Checks if ready to transmit, clears out the previous buffer, 
+ * dequeues from the transmit buffer and transmits it.
+ * 
+ * @params: UART struct of UART to be handled.
+ * 
+ * @return: None 
  */
-void UART_Handler(void * UART_tVoid){
-    tUART * UART = (tUART*)UART_tVoid;
+void UART_Handler(tUART * UART){
     // if ready to transmit
     if (!UART->Currently_Transmitting && UART->UART_Enabled && UART->TX_Queue->Size > 0){
         // clear out the previous buffer
@@ -104,6 +136,14 @@ void UART_Handler(void * UART_tVoid){
     }
 } 
 
+/**
+ * @brief: Enables UART from disable mode. Reinitializes the queue, reinitializes TX Buffer 
+ * enables Recieve DMA.
+ * 
+ * @params: UART struct of UART being enabled
+ * 
+ * @return: None
+ */
 void Enable_UART(tUART * UART){
 	HAL_UART_MspInit(UART->UART_Handle);
 	Prep_Queue(&UART->TX_Queue);
@@ -116,6 +156,15 @@ void Enable_UART(tUART * UART){
 	HAL_UART_Receive_DMA(UART->UART_Handle, UART->RX_Buffer, UART_RX_BUFF_SIZE);
 }
 
+/**
+ * @brief: Disables the UART. Flushes the tX Queue, then as soon as the Queue is done recieving, 
+ * deactivates the DMA and De-inits the UART. Then free the TX Queue and TX buffer so when re-referenced.
+ * doesn't cause a memory leak.
+ * 
+ * @params: UART 
+ * 
+ * @return: None
+ */
 void Disable_UART(tUART * UART){
     UART_Flush_TX(UART);
     // if using DMA
@@ -145,7 +194,142 @@ void Disable_UART(tUART * UART){
     UART->UART_Enabled = false;
 }
 
-int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size);
-int8_t UART_Recieve(tUART * UART, uint8_t * Data, uint8_t Data_Size);
-void Modify_UART_Baudrate(tUART * UART, int32_t New_Baudrate);
-void UART_Flush_TX(tUART * UART);
+/**
+ * @brief: Add Data to the UART Transmit Queue. Checks if UART is Enabled and if Data does not exceed
+ * buffer size. If passes checks, malloc-s a new TX node, adds Data to that TX_Node->Data ptr, then 
+ * enqueues that new node.
+ * 
+ * @params: UART to transmit from, pointer to beginning of Data segment, Data_Size
+ * 
+ * @return: Data_Size if success, 0 if transmit was unsuccessful, -1 for malloc error.
+ */
+int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size){
+    // check if transmits are enabled
+    if (!UART->UART_Enabled){
+        printf("Tried to transmit and failed. UART Disabled.\r\n");
+        return 0;
+    }
+    // if data size is too big, return fail;
+    if (Data_Size > MAX_TX_BUFF_SIZE){
+        printf("Tried to transmit and failed. Transmit Data is too big.\r\n");
+        return 0;
+    }
+    // create a new Tx node
+    TX_Node * to_Node = (TX_Node*)Task_Malloc_Data(UART->Task_ID, sizeof(TX_Node));
+        // if malloc is successful:
+    if (to_Node != NULL){
+        // malloc for the data
+        uint8_t * data_To_Add =  (uint8_t*)Task_Malloc_Data(UART->Task_ID, sizeof(uint8_t)*Data_Size);
+        // if malloc for the data is successful:
+        if (data_To_Add != NULL){
+        // copy the data over to the node and enqueue the data:
+            memcpy(data_To_Add, Data, Data_Size);
+            to_Node->Data = data_To_Add;
+            Enqeueue(UART->TX_Queue, to_Node);
+            return Data_Size;
+        }
+    }
+    // or else, free the node and pointer (if malloc for data wasn't successful)
+    free(to_Node);
+    printf("func UART_Add_Trasmit: malloc error.\r\n");
+    // return fail
+    return -1;
+}
+
+/**
+ * @brief:
+ * 
+ * @params:
+ * 
+ * @return:
+ */
+int8_t UART_Receive(tUART * UART, uint8_t * Data, uint8_t * Data_Size){
+ // if busy
+    *Data_Size = 0;
+
+    if (!UART->UART_Enabled){
+        return 0;
+    }
+    // should be an if statement (if Busy... ask Devin or Abraham about this);
+    // if Busy, WAIT (repeat queue until not busy, then able to copy over?)
+    while (UART->RX_Buff_Tail_Idx != (UART_RX_BUFF_SIZE - UART->UART_Handle->hdmarx->Instance->CNDTR)){
+        Data[*Data_Size++] = UART->RX_Buffer[UART->RX_Buff_Tail_Idx++];
+        if (UART->RX_Buff_Tail_Idx >= UART_RX_BUFF_SIZE){
+            UART->RX_Buff_Tail_Idx = 0;
+        }
+    }
+    return *Data_Size;
+}
+
+int8_t UART_SUDO_Recieve(tUART * UART, uint8_t * Data, uint8_t Data_Size){
+    return UART->SUDO_Handler->SUDO_Receive(UART, Data, Data_Size);
+}
+
+void Modify_UART_Baudrate(tUART * UART, int32_t New_Baudrate){
+    if(!UART->UART_Enabled)
+		return;
+
+	// Flush any messages queued to go out
+	UART_Flush_TX(UART);
+
+	// Stop the receiver DMA -> does DMA stop clear the RX Buffer?
+	HAL_UART_DMAStop(UART->UART_Handle);
+	UART->RX_Buff_Tail_Idx = 0;
+
+    UART->UART_Handle->Init.BaudRate = New_Baudrate;
+    HAL_UART_Init(UART->UART_Handle);
+
+    HAL_UART_Receive_DMA(UART->UART_Handle, UART->RX_Buffer, UART_RX_BUFF_SIZE);
+}
+
+void UART_Flush_TX(tUART * uart)
+{
+	// Only transmit if the UART is enabled
+	if(!uart->UART_Enabled)
+		return;
+
+	while(uart->TX_Queue->Size != 0 || uart->Currently_Transmitting)
+	{
+		UART_Tasks((void *)uart);
+	}
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+	// Find who the callback is for
+	int c = 0;
+	for(; c < UART_Callback_Handles->Size; c++)
+	{
+		tUART * uart = (tUART *)Queue_Peek(&UART_Callback_Handles, c);
+
+		if(uart->UART_Handle == huart)
+		{
+			uart->Currently_Transmitting = false;
+			return;
+		}
+	}
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	UNUSED(huart);
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+	// Find who the callback is for
+	int c = 0;
+	for(; c < UART_Callback_Handles->Size; c++)
+	{
+		tUART * uart = (tUART *)Queue_Peek(&UART_Callback_Handles, c);
+
+		if(uart->UART_Handle == huart)
+		{
+			uart->RX_Buff_Tail_Idx = 0;
+			uart->Currently_Transmitting = false;
+			HAL_DMA_Abort_IT(uart->UART_Handle->hdmarx);
+			HAL_UART_DMAStop(uart->UART_Handle);
+			HAL_UART_Receive_DMA(uart->UART_Handle, uart->RX_Buffer, UART_RX_BUFF_SIZE);
+		}
+	}
+}

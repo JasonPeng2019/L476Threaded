@@ -7,12 +7,8 @@
 
 
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <string.h>
-#include <malloc.h>
 
+#include <malloc.h>
 #include "scheduler.h"
 
 
@@ -26,13 +22,14 @@ void Start_Scheduler(void){
 	Scheduler->Next_Task = 1;	
 }
 
-/*@brief: peeks through entire scheduler tasks queue to see if it is time to execute a task.
-*   if time to execute a task, execute the task, update its runtime, last time it ran, runs count.
-* 
-* @params: none
-*
-* @return: none
-*/
+/**
+ * @brief: peeks through entire scheduler tasks queue to see if it is time to execute a task.
+ *   if time to execute a task, execute the task, update its runtime, last time it ran, runs count.
+ * 
+ * @params: none
+ *
+ * @return: none
+ */
 
 void Run_Scheduler_Tasks(void){
     if (Scheduler->Tasks->Size){
@@ -62,12 +59,13 @@ void Run_Scheduler_Tasks(void){
     }
 }
 
-/* @brief: initialize a task for the function (task_Function) and add it to the scheduler queue.
-*
-* @params: task execution function, execution function params, wait time
-*
-* @return: task ID of the task just added
-*/
+/**
+ * @brief: initialize a task for the function (task_Function) and add it to the scheduler queue.
+ *
+ * @params: task execution function, execution function params, wait time
+ *
+ * @return: task ID of the task just added
+ */
 uint32_t Start_Task(void * task_Function, void * parameters, uint32_t wait_time){
 //malloc the class
     tTask * new_Task = (tTask *)malloc(sizeof(tTask));
@@ -95,7 +93,8 @@ uint32_t Start_Task(void * task_Function, void * parameters, uint32_t wait_time)
 }
 
 
-/* @brief: delete a task from the Task_Queue.
+/**
+ * @brief: delete a task from the Task_Queue.
  * Don't update Task IDs, just in case an ID is assigned, a task is deleted
  * and then that ID needs to be referenced.
  * 
@@ -124,7 +123,8 @@ void Delete_Task(uint32_t Task_ID){
 }
 
 
-/* @brief:changes Task_Halted to FALSE for the specific task_ID. Depends on other functions
+/**
+ * @brief:changes Task_Halted to FALSE for the specific task_ID. Depends on other functions
  * to check if its halted before running task.
  * 
  * @params: Task ID to be resumed
@@ -143,7 +143,8 @@ void Resume_Task(uint32_t Task_ID){
     printf("function Resume_Task: Task not found!\r\n");
 }
 
-/* @brief: Task_Halted to TRUE for the specific task_ID. Depends on other functions
+/**
+ * @brief: Task_Halted to TRUE for the specific task_ID. Depends on other functions
  * to check if its halted before running task.
  * 
  * @params: Task ID to be halted
@@ -162,7 +163,8 @@ void Halt_Task(uint32_t Task_ID){
     printf("function Resume_Task: Task not found!\r\n");
 }
 
-/* @brief: Changes the task wait time member between execution cycles for a specific task at Task_ID.
+/**
+ * @brief: Changes the task wait time member between execution cycles for a specific task at Task_ID.
  * Refreshses the runtime so task wait time counter starts over
  *
  * @params: Task ID to be modified, wait time
@@ -182,7 +184,8 @@ void Modify_Task_Wait_Time(uint32_t Task_ID, uint32_t wait_Time){
     printf("function Resume_Task: Task not found!\r\n");
 }
 
-/* @brief: Changes the task name by copying the input string to the string (should by 16 empty spaces)
+/**
+ * @brief: Changes the task name by copying the input string to the string (should by 16 empty spaces)
  * of Task->Task_Name member
  *
  * @params: Task ID to be modified, name (max 16 string)
@@ -206,7 +209,8 @@ tScheduler * Return_Scheduler(void){
     return &Scheduler;
 }
 
-/* @brief: Malloc data of size (Size), and add that size of the data to the Task heap size member (which
+/**
+ * @brief: Malloc data of size (Size), and add that size of the data to the Task heap size member (which
  * tracks heap size). Then return a pointer to that malloc. Pointer of type void must be typecast to appropriate
  * data ptr.
  *
@@ -236,7 +240,8 @@ void * Task_Malloc_Data(uint32_t Task_ID, uint32_t size){
     return data_ptr;
 }
 
-/* @brief: free data at data_ptr and update task_heap_size accordingly by removing the size of data from 
+/**
+ * @brief: free data at data_ptr and update task_heap_size accordingly by removing the size of data from 
  * heap_size member
  * 
  * @params: Task ID of task having object removed, object to be removed
@@ -262,7 +267,8 @@ void Task_Free(uint32_t task_ID, void * data_ptr)
 	}
 }
 
- /* @brief: Add data size to the heap size tracker for a specific task
+ /**
+  * @brief: Add data size to the heap size tracker for a specific task
  *
  * @params: Task ID of task which needs data size allocation, data that size needs to be allocated for
  *
@@ -280,7 +286,8 @@ void Task_Add_Heap_Usage(uint32_t Task_ID, uint32_t data_Size){
     }
 }
 
- /* @brief: Remove data size to the heap size tracker for a specific task
+ /**
+  * @brief: Remove data size to the heap size tracker for a specific task
  *
  * @params: Task ID of task which needs data size removal, data that size needs to be removal for
  *
@@ -300,5 +307,26 @@ void Task_Rm_Heap_Usage(uint32_t task_ID, uint32_t data_Size)
 			return;
 		}
 	}
+}
+
+void Set_Task_Name(uint32_t task, const char * name){
+	tTask * t;
+	uint32_t counter = 0;
+	for(; counter < Scheduler->Tasks->Size; counter++)
+	{
+		t = (tTask *)Queue_Peek(Scheduler->Tasks,counter);
+
+		if(t->Task_ID == task)
+		{
+			strncpy((char *)t->Task_Name,name,15);
+			t->Task_Name[15] = '\0';
+
+			return;
+		}
+	}
+}
+
+void * Null_Task(void * NULL_Ptr){
+    return;
 }
 

@@ -10,8 +10,8 @@
 
 #include "main.h"
 #include "../Middlewares/Queue/queue.h"
-#include <stdbool.h>
-#include <stdint.h>
+
+
 
 
 #ifdef __cplusplus
@@ -19,7 +19,8 @@ extern "C" {
 #endif
 
 // Default size in bytes for the received buffer.
-#define UART_RX_BUFF_SIZE		512
+#define UART_RX_BUFF_SIZE		512 //why 512? 
+#define MAX_TX_BUFF_SIZE        2048
 
 typedef struct {
     uint8_t * Data; // data array in ascii
@@ -53,9 +54,15 @@ tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(uint8_t*, uint8_t), void * (*
 void Enable_UART(tUART * UART);
 void Disable_UART(tUART * UART);
 int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size);
-int8_t UART_Recieve(tUART * UART, uint8_t * Data, uint8_t Data_Size);
-void Modify_UART_Baudrate(tUART * UART, uint32_t New_Baudrate);
+int8_t UART_Receive(tUART * UART, uint8_t * Data, uint8_t * Data_Size);
+int8_t UART_SUDO_Recieve(tUART * UART, uint8_t * Data, uint8_t Data_Size);
+void Modify_UART_Baudrate(tUART * UART, int32_t New_Baudrate);
 void UART_Flush_TX(tUART * UART);
+
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart);
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart);
 
 #ifdef __cplusplus
 }
