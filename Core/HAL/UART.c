@@ -237,7 +237,7 @@ int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size){
 }
 
 /**
- * @brief:
+ * @brief: 
  * 
  * @params:
  * 

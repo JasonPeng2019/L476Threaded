@@ -8,7 +8,6 @@
 #ifndef CONSOLE_CONSOLE_H_
 #define CONSOLE_CONSOLE_H_
 
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -31,8 +30,9 @@ typedef enum{
 
 typedef enum{
     eConsole_Full_Command = 0,
-    eConsole_Repeat_Command = 0,
-    eConsole_Debug_Command = 0
+    eConsole_Repeat_Command,
+    eConsole_Debug_Command,
+    eConsole_Halted_Command
 } eCommand_Type;
 
 typedef struct {
@@ -40,8 +40,10 @@ typedef struct {
     const char * Command_Name;
     const char * Description;
     void (*Call_Function)(void *);
+    void (*Resume_Function)(void *);
     void (*Stop_Function)(void *);
     void * Call_Params;
+    void * Resume_Params;
     void * Stop_Params;
     uint32_t Repeat_Time;
 } tConsole_Command;
@@ -60,6 +62,7 @@ typedef struct {
     Queue * Console_Commands;
     Queue * Running_Repeat_Commands;
 } tConsole;
+
 
 #ifdef __cplusplus
 }

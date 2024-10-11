@@ -1,7 +1,7 @@
 /*
  * scheduler.c
  *
- *  Created on: Sep 16, 2024
+ *  Created on: Jun 16, 2024
  *      Author: jason.peng
  */
 
@@ -42,7 +42,9 @@ void Run_Scheduler_Tasks(void){
                 if (!curr_Task->Task_Halted){
                     // if task timer has run out, execute the task
                     uint32_t start = HAL_GetTick();
-                    curr_Task->Task_Exe(curr_Task->Task_Params);
+                    if (curr_Task->Task_Exe != NULL){
+                        curr_Task->Task_Exe(curr_Task->Task_Params);
+                    }
                     uint32_t stop = HAL_GetTick();
                         //note: can do this because exe takes a void type. Thus, need to typecast params into 
                         //void when loading it to Task_Params member
