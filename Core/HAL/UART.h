@@ -8,7 +8,7 @@
 #ifndef UART_UART_H_
 #define UART_UART_H_
 
-#include "main.h"
+#include "../Inc/main.h"
 #include "../Middlewares/Queue/queue.h"
 
 
@@ -28,11 +28,6 @@ typedef struct {
 } TX_Node;
 
 typedef struct {
-    void * (*SUDO_Transmit)(tUART * UART, uint8_t * Data, uint16_t Data_Size);
-    void * (*SUDO_Receive)(tUART * UART, uint8_t * Data, uint16_t * Data_Size);
-} SUDO_UART;
-
-typedef struct {
     UART_HandleTypeDef * UART_Handle;
     bool Use_DMA;
     bool UART_Enabled;
@@ -46,6 +41,10 @@ typedef struct {
     SUDO_UART * SUDO_Handler;
 } tUART;
 
+typedef struct {
+    void * (*SUDO_Transmit)(tUART * UART, uint8_t * Data, uint16_t Data_Size);
+    void * (*SUDO_Receive)(tUART * UART, uint8_t * Data, uint16_t * Data_Size);
+} SUDO_UART;
 
 
 void Init_UART_CallBack_Queue(void);

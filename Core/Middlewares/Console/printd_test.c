@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#ifdef PRINT_TEST_DEBUG
+
 // Simulating UART_Add_Transmit function
 static void test_transmit(void* UART_Handler, const char* tx_Data, size_t data_size) {
     // Simulated UART transmission logic
@@ -59,3 +61,5 @@ int main() {
     return 0;
 }
 */
+
+#endif

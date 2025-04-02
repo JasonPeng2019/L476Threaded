@@ -8,7 +8,7 @@
                 "${workspaceFolder}/Drivers/STM32L4xx_HAL_Driver/Inc",
                 "${workspaceFolder}/Drivers/STM32L4xx_HAL_Driver/Inc/Legacy",
                 "${workspaceFolder}/Drivers/CMSIS/Device/ST/STM32L4xx/Include",
-                "${workspaceFolder}/Drivers/CMSIS/Include"
+                "${workspaceFolder}/Drivers/CMSIS/Include",
             ],
             "defines": [
                 "_DEBUG",

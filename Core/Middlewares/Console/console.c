@@ -21,12 +21,26 @@
 #include "stm32l476xx.h"
 #include "stm32l4xx_hal.h"
 #include "../Scheduler/scheduler.h"
+#include "../Queue/queue.h"
 
 static tConsole * console;
 static void RX_Task(void * NULL_Ptr);
 static void TX_Task(void * NULL_Ptr);
-static void Process_Command(void);
+static void Process_Command(uint8_t * data_ptr, uint16_t command_size);
 static void Clear_Screen(void);
+static void Pause_Commands(void);
+static void Quit_Commands(void);
+
+static bool RX_Buff_MAX_SURPASSED = false;
+
+//typeConsole:
+/**
+ * UART_Handler: UART Handle for the UART that the console is using
+ * TX_Buff[MAX_CONSOLE_SIZE]; a buffer for the TX Console. 
+ * TX_Buff_Idx: The index at which the consoel reads the TX buffer
+ * RX_Buff[MAX_CONSOLE_SIZE]; buffer for the RX side of the console process
+ * RX_Buff_Idx:     To do: figure out how RX process works?
+ */
 
 void Init_Console(tUART * UART){
     console->UART_Handler = UART;
@@ -39,7 +53,6 @@ void Init_Console(tUART * UART){
     console->TX_Task_Id = Start_Task(TX_Task, NULL, 0);
     Prep_Queue(console->Console_Commands);
     Prep_Queue(console->Running_Repeat_Commands);
-
     Add_Console_Command("clear", "Clear the screen", Clear_Screen, NULL);
     printd("\r\nInput Command: \r\n");
     console->Complete_Task = Null_Task;
@@ -50,7 +63,7 @@ void Init_Console(tUART * UART){
 // one console to handle all the full commands, each additional call is a new console
 // new console killed after debug task ended
 // one main console to handle all the tasks RX, TX, full tasks, and keep track of main queues (Console commands to execute, )
-
+// Description should be formatted as follows: str[] = "HELLOO WORLDDDD"
 tConsole_Command * Init_Reg_Command(const char * command_Name, const char * Description, void * Call_Function, void * Call_Params){
     tConsole_Command * new_Command = (tConsole_Command *)Task_Malloc_Data(console->Complete_Task_Id, sizeof(tConsole_Command));
     // if malloc successful:
@@ -79,7 +92,8 @@ tConsole_Command * Init_Reg_Command(const char * command_Name, const char * Desc
 
 
 tConsole_Command * Init_Debug_Command(const char * command_Name, const char * Description,
-    void * Call_Function, void * Call_Params, void * Resume_Function, void * Resume_Params){
+    void * Call_Function, void * Call_Params, void * Halt_Function, void * Halt_Params, 
+    void * Resume_Function, void * Resume_Params, void * Stop_Function, void * Stop_Params){
     //malloc new command
     tConsole_Command * new_Command = (tConsole_Command *)Task_Malloc_Data(console->Complete_Task_Id, sizeof(tConsole_Command));
     // if malloc successful
@@ -95,12 +109,20 @@ tConsole_Command * Init_Debug_Command(const char * command_Name, const char * De
             //initialize call function & init call params
             new_Command->Call_Function = Call_Function;
             new_Command->Call_Params = Call_Params;
+
+            new_Command->Halt_Function = Halt_Function;
+            new_Command->Halt_Params = Halt_Params;
             //init resume/stop function & resume/stop function params
             new_Command->Resume_Function = Resume_Function;
             new_Command->Resume_Params = Resume_Params;
+
+            new_Command->Stop_Function = Stop_Function;
+            new_Command->Stop_Params = Stop_Params;
+
             //assign a repeat time
             new_Command->Repeat_Time = 50; // 50 ms
             // add to commmand_queue in console
+            // note: EACH new_Command is a ptr to the command
             Enqueue(console->Console_Commands, new_Command);
         }
     }
@@ -116,7 +138,7 @@ static void Flush_TX_Data(void * Task_Data){
 }
 
 //clear screen
-static void Clear_Screen(void * Data){
+static void Clear_Screen(void){
 	printf("\033[2J");
 	printf("%c[2j%c[H",27,27);
 }
@@ -150,71 +172,197 @@ int __io_putchar(int ch) {
 }
 
 
+
+/* RX functionality:
+console has a 2 states:
+1) wait for commands/halted
+    hitting enter here causes commands to to be inputted
+    can resume with 'r', pause any commands with !p Command or stop any commands with !q Command - 
+    these are all processed by the process commands function
+2) servicing
+    does not take any inputs, cannot input anything into the queue, and the only thing
+    it takes is enter to pause
+
+*/
+
 static void RX_Task(void * NULL_Ptr){
     //malloc a buffer to recieve the DMA transmission -. can't use backspace cus then can't match to stuff like \b or \r
     uint8_t data[UART_RX_BUFF_SIZE];
     //initialize an int to hold the size for later storage
     uint16_t data_size;
     //recieve the data into the buffer
-    UART_Receive(console->UART_Handler, data, data_size);
+    UART_Receive(console->UART_Handler, data, &data_size);
     //go thru the buffer using a counter to the data_size
     for (uint16_t counter = 0; counter < data_size; counter++){
-    //if waiting for commands: can put in data
-        if (console->Console_State == eConsole_Wait_For_Commands) {
-        //if backspace: transmit a backspace and decrement the index of the UART buffer (since want to overwrite, go backwards one)
-            if (data[counter] == '\b' || data[counter] == '0x7F'){
-                if (console->RX_Buff_Idx > 0){
-                    printf("\b \b");
-                    
-                }
+    // if paused: check for resume command
+        if (console->Console_State == eConsole_Halting_Commands){
+            int i = 0;
+            for (; i < console->Running_Repeat_Commands->Size; i++){
+                tConsole_Command * curr_Command = (tConsole_Command*)Queue_Peek(console->Running_Repeat_Commands, i);
+                curr_Command->Stop_Function(curr_Command->Stop_Params);
             }
-        //else store the next char in the RX buff.
-
-        //if we get a return, null terminate the buff, print a new line, then store the command and process_command()
-        //then clear the command buffer
-        //else echo the command:
-        //if command is too long, (clear buffer)
-
-        //if stop, initialize a stop buffer
-        // stop: get rid of the halt, add the command back to the command list, and run stop command.
-
-        //handle the command: if in halted, then call resume if enter,
+            console->Console_State = eConsole_Halted_Commands;
+        }
+        if (console->Console_State == eConsole_Halted_Commands){ 
+            if (data[counter - 2] == '!' && data[counter - 1] == 'r' && data[counter] == '\r'){
+                Resume_Commands();
             }
         }
-    // else if not waiting for commands, must be in servicing mode
-        // if return: pause all commands, halt all the tasks, and change to halted. change 
-        // console to waiting for commands. 
+        if (console->Console_State == eConsole_Resume_Commands)
+    // otherwise, possibly paused OR waiting;
+    // 3 cases: either backspace, enter, or another character
+        if (console->Console_State == eConsole_Wait_For_Commands || console->Console_State == eConsole_Halted_Commands) {
+        //if backspace: transmit a backspace and decrement the index of the UART buffer (since want to overwrite, go backwards one)
+            if (console->RX_Buff_Idx >= MAX_CONSOLE_BUFF_SIZE-1){
+                console->RX_Buff_Idx = 0;
+                RX_Buff_MAX_SURPASSED = true;
+            } 
+            if (data[counter] == '\b' || data[counter] == '0x7F'){
+                if (console->RX_Buff_Idx > 0){
+                    printd("\b \b");
+                    console->RX_Buff_Idx--;
+                }
+            }
+     
+        //if we get a return, null terminate the buff, print a new line, then store the command and process_command(); then clear the command buffer; if command is too long, (clear buffer)
+            else if (RX_Buff_MAX_SURPASSED == false) {
+                console->RX_Buff[console->RX_Buff_Idx] = data[counter];
+                console->RX_Buff_Idx++;
+                printd((const char *)data[counter]);
+            }
+            if (data[counter] == '\r'){
+            console->RX_Buff[console->RX_Buff_Idx - 1] = '\0';
+            console->RX_Buff_Idx = 0;
+                printf("\r\n");
+                if (RX_Buff_MAX_SURPASSED) {
+                    printd("\r\n**COMMAND TOO LONG**\r\n");
+                } else {
+                    Process_Command(console->RX_Buff, console->RX_Buff_Idx);
+                    // need to change to servicing command in process() if (r) is the command
+                }  
+                RX_Buff_MAX_SURPASSED = false; 
+            }
+        } 
+        else if (console->Console_State == eConsole_Servicing_Command){
+            // if servicing command and enter, then halt command and move to waiting command
+            if (data[counter] == '\r'){
+                printf("Console paused.\r\n");
+                Pause_Commands();
+                }
 
-        //if halted: remove the command from command list, then add halt to the command list.
+        } else if (console->Console_State = eConsole_Quit_Commands){
+            int i = 0;
+            for (;i < console->Running_Repeat_Commands->Size; i++){
+                tConsole_Command * curr_command;
+                //note: Queue_Peek returns PTR to command
+                //command itself has ptr to the actual quit function
+                curr_command = Queue_Peek(console->Running_Repeat_Commands, i);
+                curr_command->Stop_Function(curr_command->Stop_Params);              
+                }
+            }
+        }
+    }
+
+static void Process_Commands(uint8_t * data_ptr, uint16_t command_size){
+    char command[command_size];
+    strcpy(command, (char *)data_ptr);
+    char prompt_help_stop_halt[4]; // size of help or quit
+    strncpy(prompt_help_stop_halt, command, 4);
+    prompt_help_stop_halt[4] = '\0';
+    char prompt_resume[6]; // size of resume
+    strncpy(prompt_resume, command, 6);
+    prompt_resume[6] = '\0';
+
+    bool halt_flag = false;
+    bool help_flag = false;
+    bool stop_flag = false;
+    bool resume_flag = false;
+    bool flag_3 = false; // any of help, halt, stop
+    if (strcmp(prompt_help_stop_halt, "halt") == 0){
+        halt_flag = true;
+        flag_3 = true;
+    }
+    if (strcmp(prompt_help_stop_halt, "stop") == 0){
+        stop_flag = true;
+        flag_3 = true;
+    }
+    if (strcmp(prompt_help_stop_halt, "help") == 0){
+        help_flag = true;
+        flag_3 = true;
+    }
+    if (strcmp(prompt_resume, "resume") == 0){
+        resume_flag = true;
+    }
+
+    if (strcmp(command, "help") == 0){
+        printd("\r\n");
+        int i = 0;
+        for (; i < console->Console_Commands->Size; i++){
+            tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek(console->Console_Commands, i);
+            printd("%s: %s\r\n", curr_Command->Command_Name, curr_Command->Description);
+        }
+    }
+    else if (strcmp(command, "quit") == 0){
+        printd("Quitting commands.\r\n");
+        Quit_Commands();
+    }
+    else if (flag_3){
+        char prompt_command[command_size - 4];
+        strcpy(prompt_command, command + 4);
+        for (int i = 0; i < console->Console_Commands->Size; i++){
+        tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek(console->Console_Commands, i);
+        if (strcmp(prompt_command, curr_Command->Command_Name) == 0){
+            if (halt_flag){
+                curr_Command->Halt_Function(curr_Command->Halt_Params);                  
+            }
+            if (stop_flag){
+                curr_Command->Stop_Function(curr_Command->Stop_Params);
+            }
+            if (help_flag) {
+                printd("%s: %s\r\n", curr_Command->Command_Name, curr_Command->Description);
+                }
+            }
+        }
+    }
+    else if (resume_flag){
+        char prompt_command[command_size - 6];
+        strcpy(prompt_command, command + 6);
+        for (int i = 0; i < console->Console_Commands->Size; i++){
+            tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek(console->Console_Commands, i);
+            if (strcmp(prompt_command, curr_Command->Command_Name == 0)){
+                curr_Command->Resume_Function(curr_Command->Resume_Params);
+            }
+        }
+    }
+    else {
+        for (int i = 0; i < console->Console_Commands->Size; i++){
+            tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek(console->Console_Commands, i);
+            if (strcmp(command, curr_Command->Command_Name) == 0){
+                bool command_alrdy_running = false;
+                for (int c = 0; c < console->Running_Repeat_Commands->Size; c++){
+                    tConsole_Command * curr_Running_Command = (tConsole_Command *)Queue_Peek(console->Running_Repeat_Commands, c);
+                    if (strcmp(command, curr_Running_Command->Command_Name)){
+                        printd("Command Already Running\r\n");
+                        command_alrdy_running = true;
+                    }
+                }
+                if (!command_alrdy_running){
+                    curr_Command->Call_Function(curr_Command->Call_Params);
+                    printd("Starting %s command. \r\n", curr_Command->Command_Name);
+                }
+            }
+        }
     }
 }
+    
 
-
-static void Process_Command(void){
-    // if strcmp help
-    // for every command in console.commands_queue, peek at the command
-    // switch: if command name is equal to input:
-    // call function: check command state and call according command.
-    // types of command inputs: A) FULL B) HALT (enter) C) RESUME 
-    // if full/start command: call command (call function)
-    // if repeat/debug command: check the console for a task that matches.
-    // if none, start a new console and task, do all the assigning, etc. use task_malloc.
-    // if in, do nothing and print that task is already running.
-    // if return: check status: if servicing or halted.
-    // if servicing: halt commands in console's running command queue
-    // if halted: call resume functions on paused running command queue
-    // "smag" should be a full command (stop mag = smag)
-    // 
-    // Leetcode Premium
+void Pause_Commands(void){
+    console->Console_State = eConsole_Halting_Commands;
+    return;
 }
 
-// add command: just adds the name of a command to the queue, but when runs, use a different command.
-// -> COMMANDS are added to the command queue (not running), and console tasks are added when command is called
-// for a repeat command. Command is added to running list Queue (pointer, so same command), and all are halted 
-// when halt is needed. if stop is needed, same thing
-// console commands are 
+void Quit_Commands(void){
+    return;
+}
 
-//handle task: if a debug command / repeat command, need to make a new task. if stop, get rid of the task
-
-//flush TX 
 

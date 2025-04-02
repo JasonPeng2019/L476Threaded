@@ -5,11 +5,26 @@
             "label": "C/C++: gcc.exe build active file",
             "command": "C:/msys64/ucrt64/bin/gcc.exe",
             "args": [
+        
+                "-I",
+                "${workspaceFolder}/Core/Inc",
+                "-I",
+                "${workspaceFolder}/Drivers/STM32L4xx_HAL_Driver/Inc",
+                "-I",
+                "${workspaceFolder}/Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal.h",
+                "-I",
+                "${workspaceFolder}/Drivers/STM32L4xx_HAL_Driver/Inc/Legacy",
+                "-I",
+                "${workspaceFolder}/Drivers/CMSIS/Device/ST/STM32L4xx/Include",
+                "-I",
+                "${workspaceFolder}/Drivers/CMSIS/Include",
+
                 "-fdiagnostics-color=always",
                 "-g",
                 "${file}",
                 "-o",
-                "${fileDirname}\\${fileBasenameNoExtension}.exe"
+                "${fileDirname}\\${fileBasenameNoExtension}.exe",
+                
             ],
             "options": {
                 "cwd": "C:/msys64/ucrt64/bin"

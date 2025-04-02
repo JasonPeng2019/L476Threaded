@@ -1,0 +1,7 @@
+middle of console -> need to come up with way to pause the command when hit enter,
+but enter can still be inputted when waiting for command
+
+-> need to configure what happens when waiting for command vs servicing command, etc.
+-> game plan: when waiting for command, enter is just the command
+-> when servicing command, enter is pause. need a PAUSE command function that can also be called internally.
+-> when paused command, q is quit.

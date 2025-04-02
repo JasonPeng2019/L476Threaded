@@ -16,7 +16,7 @@
 
 static bool UART_Callbacks_Initialized = false;
 static Queue * UART_Callback_Handles;
-static void UART_Handler(tUART * UART);
+static void UART_Task(tUART * UART);
 
 void Init_UART_CallBack_Queue(void){
     Prep_Queue(UART_Callback_Handles);
@@ -50,7 +50,7 @@ tUART * Init_DMA_UART(UART_HandleTypeDef * UART_Handle){
         //enqueue it to the callback handles so we can find it when we need to do callbacks
         Enqeueue(UART_Callback_Handles, (void *)UART);
         //start a new task for checking this UART and handling it
-        UART->Task_ID = Start_Task(UART_Handler, (void*)UART, 0);  // timeout value is 0. that means 
+        UART->Task_ID = Start_Task(UART_Task, (void*)UART, 0);  // timeout value is 0. that means 
                                                 // will always proc for new UART TX's. (Immediately)
 
         //add the UART memory to the memory for the task (right now only holds task structure)
@@ -87,7 +87,7 @@ tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(uint8_t*, uint8_t), void * (*
         UART->SUDO_Handler->SUDO_Transmit = Transmit_Func_Ptr;
         UART->SUDO_Handler->SUDO_Receive = Receive_Func_Ptr;
         Prep_Queue(UART->TX_Queue);
-        UART->Task_ID = Start_Task(UART_Handler, (void*)UART, 0);
+        UART->Task_ID = Start_Task(UART_Task, (void*)UART, 0);
         Task_Add_Heap_Usage(UART->Task_ID, (void*)UART);
         Set_Task_Name(UART->Task_ID, "SUDO UART RX/TX");
     } else {
@@ -116,7 +116,7 @@ tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(uint8_t*, uint8_t), void * (*
  * 
  * @return: None 
  */
-void UART_Handler(tUART * UART){
+void UART_Task(tUART * UART){
     // if ready to transmit
     if (!UART->Currently_Transmitting && UART->UART_Enabled && UART->TX_Queue->Size > 0){
         // clear out the previous buffer

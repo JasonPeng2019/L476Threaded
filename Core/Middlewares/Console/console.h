@@ -26,13 +26,17 @@ extern "C" {
 typedef enum{
     eConsole_Wait_For_Commands = 0,
 	eConsole_Servicing_Command,
+    eConsole_Halting_Commands,
+    eConsole_Halted_Commands,
+    eConsole_Resume_Commands,
+    eConsole_Quit_Commands,
 } eConsole_State;
 
-typedef enum{
+typedef enum{ 
+    // look more at other console to find out difference between debug command, etc
     eConsole_Full_Command = 0,
     eConsole_Repeat_Command,
     eConsole_Debug_Command,
-    eConsole_Halted_Command
 } eCommand_Type;
 
 typedef struct {
@@ -40,9 +44,11 @@ typedef struct {
     const char * Command_Name;
     const char * Description;
     void (*Call_Function)(void *);
+    void (*Halt_Function)(void *);
     void (*Resume_Function)(void *);
     void (*Stop_Function)(void *);
     void * Call_Params;
+    void * Halt_Params;
     void * Resume_Params;
     void * Stop_Params;
     uint32_t Repeat_Time;
@@ -61,7 +67,11 @@ typedef struct {
     eConsole_State Console_State;
     Queue * Console_Commands;
     Queue * Running_Repeat_Commands;
+
 } tConsole;
+
+void Quit_Commands(void * TaskHandle);
+void Pause_Commands(void);
 
 
 #ifdef __cplusplus

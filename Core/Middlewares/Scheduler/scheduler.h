@@ -26,8 +26,8 @@ typedef struct {
     uint32_t Last_Run_Time;
 	bool Task_Halted;
 	uint32_t Task_Runtime; 		// time task runs
-    uint8_t Task_Runs;
-	uint8_t Task_Name[16];
+    uint8_t Task_Runs;			// # of times task has run
+	uint8_t Task_Name[16];		//
 	void (*Task_Exe)(void *);
 	void * Task_Params; 		//params that task_exe takes - can be whatever. Usually the handle (the only thing unique between tasks).
 	uint32_t Heap_Use; 			//track how much memory has been malloc'd to task
