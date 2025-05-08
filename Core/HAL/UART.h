@@ -10,6 +10,7 @@
 
 #include "../Inc/main.h"
 #include "../Middlewares/Queue/queue.h"
+#include "../Middlewares/Console/console.h"
 
 
 
@@ -39,7 +40,21 @@ typedef struct {
     volatile bool Currently_Transmitting;
     uint8_t Task_ID;
     SUDO_UART * SUDO_Handler;
+    tUART_Repeat_Receive * Repeat_Handle;
 } tUART;
+
+typedef struct {
+    tUART * UART;
+    uint8_t Task_ID;
+    Queue * Repeat_Queue;
+} tUART_Repeat_Receive;
+
+typedef struct {
+    uint8_t * Data_Buff;
+    uint8_t * Data_Size_Buff;
+    bool * success_Buff;
+    bool done;
+} tUART_Repeat_Node;
 
 typedef struct {
     void * (*SUDO_Transmit)(tUART * UART, uint8_t * Data, uint16_t Data_Size);

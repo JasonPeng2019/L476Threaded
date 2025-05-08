@@ -25,7 +25,7 @@ Node * Create_Node(void * data){
 }
 
 /*
- * @brief: free node
+ * @brief: free node and its data at the data ptr (not inside data ptr)
  *
  * @params: node to be freed
  *
@@ -44,16 +44,19 @@ uint32_t Free_Node(Node * node){
 }
 
 
+
 /** @brief: preps a queue and initializes values
  *
  * @params: queue object to be prepped (must be pre-initialized)
  *
  * @return: nothing - preps object in place
  */
-void Prep_Queue(Queue* que){
+Queue * Prep_Queue(void){
+	Queue * que = malloc(sizeof(Queue));
 	que->Head = NULL;
 	que->Tail = NULL;
 	que->Size = 0;
+	return que;
 }
 
 /**
@@ -65,7 +68,7 @@ void Prep_Queue(Queue* que){
  * @return: 1 (success) or 0 (failure)
  */
 
-uint8_t Enqeueue(Queue * que, void * data){
+uint8_t Enqueue(Queue * que, void * data){
 	Node * new_Node = Create_Node(data);
 	if (new_Node != NULL){
 		if (que->Size == 0){
@@ -134,7 +137,7 @@ void Dequeue_Free(Queue * que){
 
 
 /**
- * @brief: peeks at the [index] item 
+ * @brief: peeks at the data of [index] item 
  *
  * @params: Queue to peek through
  *
@@ -155,8 +158,15 @@ void * Queue_Peek(Queue * que, uint32_t index){
 	}
 }
 
-
-Node * Node_Peek(Queue * que, uint32_t index){
+/**
+ * @brief: peeks at the NODE of [index] item
+ * 
+ * @params: Queue to peek through, index of item to peek at
+ * 
+ * @return: Node signature of queued node. For example, in scheduler, returns task struct
+ *
+ */
+Node * Queue_Node_Peek(Queue * que, uint32_t index){
 	if (index < que->Size){
 		Node * travler = que->Head;
 		uint32_t counter = 0;
@@ -171,6 +181,12 @@ Node * Node_Peek(Queue * que, uint32_t index){
 	}
 }
 
+/**
+ * @brief: frees the entire Queue, nodes, and data at node->data.
+ * @params: queue to free
+ * @return: the amount of memory freed. 
+ * Should match this with sizeof(Queue) to see if whole queue was really freed. 
+ */
 uint32_t Free_Queue(Queue * que){
 	uint32_t mem_Use = 0;
 	Node * cNode = que->Head;
@@ -180,5 +196,6 @@ uint32_t Free_Queue(Queue * que){
 		cNode = cNode->Next;
 		mem_Use += Free_Node(toFree);
 	}
+	return mem_Use;
 }
 

@@ -22,6 +22,7 @@ extern "C" {
 #endif
 
 #define MAX_CONSOLE_BUFF_SIZE		256
+#define PRINTF_DELAY_TIME           100
 
 typedef enum{
     eConsole_Wait_For_Commands = 0,
@@ -56,12 +57,10 @@ typedef struct {
 
 typedef struct {
     tUART * UART_Handler;
-    uint8_t TX_Buff[MAX_CONSOLE_BUFF_SIZE];
-    uint32_t TX_Buff_Idx;
     uint8_t RX_Buff[MAX_CONSOLE_BUFF_SIZE];
     uint32_t RX_Buff_Idx;
     uint32_t RX_Task_Id;
-    uint32_t TX_Task_Id;
+    uint32_t Debug_Task_Id;
     uint32_t Complete_Task_Id;
     void (*Complete_Task)(void *);
     eConsole_State Console_State;
@@ -70,9 +69,19 @@ typedef struct {
 
 } tConsole;
 
-void Quit_Commands(void * TaskHandle);
+void printd(const char* format, ...);
+void Quit_Commands(void);
+void Resume_Commands(void);
 void Pause_Commands(void);
-
+static void Debug_Runner_Task(void * NULL_Ptr);
+static void Process_Commands(uint8_t * data_ptr, uint16_t command_size);
+static void RX_Task(void * NULL_Ptr);
+void printd(const char* format, ...);
+static void Clear_Screen(void);
+tConsole_Command * Init_Debug_Command(const char * command_Name, const char * Description,
+    void * Call_Function, void * Call_Params, void * Halt_Function, void * Halt_Params, 
+    void * Resume_Function, void * Resume_Params, void * Stop_Function, void * Stop_Params);
+void Init_Console(tUART * UART);
 
 #ifdef __cplusplus
 }

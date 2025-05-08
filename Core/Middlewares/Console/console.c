@@ -24,11 +24,14 @@
 #include "../Queue/queue.h"
 
 static tConsole * console;
+uint8_t data[UART_RX_BUFF_SIZE];
+uint16_t data_size;
 static void RX_Task(void * NULL_Ptr);
-static void TX_Task(void * NULL_Ptr);
-static void Process_Command(uint8_t * data_ptr, uint16_t command_size);
+static void Debug_Runner_Task(void * NULL_Ptr);
+static void Process_Commands(uint8_t * data_ptr, uint16_t command_size);
 static void Clear_Screen(void);
 static void Pause_Commands(void);
+static void Resume_Commands(void);
 static void Quit_Commands(void);
 
 static bool RX_Buff_MAX_SURPASSED = false;
@@ -43,16 +46,15 @@ static bool RX_Buff_MAX_SURPASSED = false;
  */
 
 void Init_Console(tUART * UART){
+    
     console->UART_Handler = UART;
-    console->TX_Buff_Idx = 0;
     console->RX_Buff_Idx = 0;
     console->Console_State = eConsole_Wait_For_Commands;
     console->RX_Task_Id = Start_Task(RX_Task, NULL, 0);
     Set_Task_Name(console->RX_Task_Id, "CONSOLE_RX");
-    Set_Task_Name(console->TX_Task_Id, "CONSOLE_TX"); // instead of transmitting constantly, 
-    console->TX_Task_Id = Start_Task(TX_Task, NULL, 0);
-    Prep_Queue(console->Console_Commands);
-    Prep_Queue(console->Running_Repeat_Commands);
+    console->Debug_Task_Id = Start_Task(Debug_Runner_Task, NULL, 200); // execute every debug command every 200 ms
+    console->Console_Commands = Prep_Queue();
+    console->Running_Repeat_Commands = Prep_Queue();
     Add_Console_Command("clear", "Clear the screen", Clear_Screen, NULL);
     printd("\r\nInput Command: \r\n");
     console->Complete_Task = Null_Task;
@@ -85,7 +87,7 @@ tConsole_Command * Init_Reg_Command(const char * command_Name, const char * Desc
             //assign a repeat time of 0
             new_Command->Repeat_Time = 0;
             // add to command_queue in console
-            Enqeueue(console->Console_Commands, new_Command);
+            Enqueue(console->Console_Commands, new_Command);
         }
     }
 }
@@ -128,15 +130,6 @@ tConsole_Command * Init_Debug_Command(const char * command_Name, const char * De
     }
 }
 
-//flush TX data
-static void Flush_TX_Data(void * Task_Data){
-    fflush(stdout);
-    if(console->TX_Buff_Idx > 0){
-        UART_Add_Transmit(console->UART_Handler, console->TX_Buff, console->TX_Buff_Idx);
-        console->TX_Buff_Idx = 0;
-    }
-}
-
 //clear screen
 static void Clear_Screen(void){
 	printf("\033[2J");
@@ -148,7 +141,7 @@ void printd(const char* format, ...) {
     va_list args;
     const char* percent_sign = strchr(format, '%');
     if (percent_sign == NULL) {
-        UART_Add_Transmit(console->UART_Handler, format, strlen(format));
+        UART_Add_Transmit(console->UART_Handler, (uint8_t *)format, strlen(format));
     } else {
         va_start(args, format);
         int needed_size = vsnprintf(NULL, 0, format, args) + 1;  // +1 for null terminator
@@ -167,7 +160,7 @@ void printd(const char* format, ...) {
 //redirect printf to a blocking transmission
 int __io_putchar(int ch) {
     // Send the character using HAL_UART_Transmit in blocking mode
-    HAL_UART_Transmit(console->UART_Handler, (uint8_t*)&ch, 1, HAL_MAX_DELAY);  // Blocking call
+    HAL_UART_Transmit(console->UART_Handler, (uint8_t*)&ch, 1, PRINTF_DELAY_TIME);  // Blocking call
     return ch;
 }
 
@@ -187,9 +180,7 @@ console has a 2 states:
 
 static void RX_Task(void * NULL_Ptr){
     //malloc a buffer to recieve the DMA transmission -. can't use backspace cus then can't match to stuff like \b or \r
-    uint8_t data[UART_RX_BUFF_SIZE];
-    //initialize an int to hold the size for later storage
-    uint16_t data_size;
+    
     //recieve the data into the buffer
     UART_Receive(console->UART_Handler, data, &data_size);
     //go thru the buffer using a counter to the data_size
@@ -261,6 +252,9 @@ static void RX_Task(void * NULL_Ptr){
                 }
             }
         }
+         
+        memset(data, 0, UART_RX_BUFF_SIZE);
+        data_size = 0;
     }
 
 static void Process_Commands(uint8_t * data_ptr, uint16_t command_size){
@@ -355,6 +349,12 @@ static void Process_Commands(uint8_t * data_ptr, uint16_t command_size){
     }
 }
     
+static void Debug_Runner_Task(void * NULL_Ptr){
+    for (int i = 0; i < console->Running_Repeat_Commands; i++){
+        tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek(console->Running_Repeat_Commands, i);
+        curr_Command->Call_Function(curr_Command->Call_Params);
+    }
+}
 
 void Pause_Commands(void){
     console->Console_State = eConsole_Halting_Commands;
@@ -362,6 +362,12 @@ void Pause_Commands(void){
 }
 
 void Quit_Commands(void){
+    console->Console_State = eConsole_Quit_Commands;
+    return;
+}
+
+void Resume_Commands(void){
+    console->Console_State = eConsole_Resume_Commands;
     return;
 }
 

@@ -18,7 +18,7 @@ static tScheduler * Scheduler;  //keeps track of the latest ID, as well as keeps
                                 //that doesn't disappear and holds all the tasks in a queue
 
 void Start_Scheduler(void){
-	Prep_Queue(Scheduler->Tasks);
+	Scheduler->Tasks = Prep_Queue();
 	Scheduler->Next_Task = 1;	
 }
 
@@ -84,8 +84,8 @@ uint32_t Start_Task(void * task_Function, void * parameters, uint32_t wait_time)
         new_Task->Task_Exe = task_Function;
         new_Task->Task_Params = parameters;
 
-        //enqeueue the task. return the failure (0) if failure (if bool, where bool is sucess/failure)
-        Enqeueue(Scheduler->Tasks, new_Task);
+        //enqueue the task. return the failure (0) if failure (if bool, where bool is sucess/failure)
+        Enqueue(Scheduler->Tasks, new_Task);
         new_Task->Last_Run_Time = HAL_GetTick();
     } else {
         return 0;

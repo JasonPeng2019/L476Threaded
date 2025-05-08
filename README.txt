@@ -18,7 +18,8 @@ Exceptions are middlewares, because middlewares are not high in volume. If middl
 4) ALL driver functions should have USAGE notes detailed at the top.
 Clear instructions on how to use the driver should be documented at top.
 
-5) All state machine changes must be done via FUNCTIONS, not DIRECTLY.
+5) All state machine changes must be done via FUNCTIONS, not DIRECTLY. This way
+ALL changes of said state machine can be documented.
 
 6) Multiple param tasks in the scheduler must have a DOUBLE POINTER TYPE param list in the "params" parameter
 
@@ -32,3 +33,27 @@ to make multiple commands for the same module, have to give each instance of mod
 that description in the command name.
 to make multiple same commands run, give multiple instances and give different names because
 otherwise no way to distinguish
+
+@Notes-2: Will need to set up interrupt service for LoRA and power on from sleep;
+ * need to turn on device when pinged.
+
+
+Headhunters:
+
+Justin
+- staff engineer Palantir for backend development
+- any ex palantir 
+
+
+To do: start UART_Repeat_Task and repeathandlestruct
+
+
+// repeatedly calls the recieve function. Look at how abraham on his version makes the thing
+    // cancel itself / switch itself off after executing one time, and take inspiration?
+    // -> do leetcode, do data learning and hop on project once every 3 days
+    // -> move to ex-palantir and gather those connections
+    // -> do entrepernuership at palantir with Justin's referral
+    // trying to move into a data role as opposed to SWE. -> text Justin
+    // is backend knowledge needed?
+    // move to backend with Justin; have him teach me, work with him, etc.
+    // ask vaibhav to move onto the project

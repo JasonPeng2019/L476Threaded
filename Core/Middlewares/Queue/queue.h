@@ -30,8 +30,8 @@ typedef struct {
 } Queue;
 
 Node * Create_Node(void * data);
-void Prep_Queue(Queue * que);
-uint8_t Enqeueue(Queue * que, void * data);
+Queue * Prep_Queue(void);
+uint8_t Enqueue(Queue * que, void * data);
 void * Dequeue(Queue * que);
 void Dequeue_Free(Queue * que);
 void * Queue_Peek(Queue * que, uint32_t index);
