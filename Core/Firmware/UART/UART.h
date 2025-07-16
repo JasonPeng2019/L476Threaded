@@ -1,16 +1,16 @@
 /*
  * UART.h
  *
- *  Created on: Sep 19, 2024
+ *  Created on: Feb 19, 2025
  *      Author: jason.peng
  */
 
 #ifndef UART_UART_H_
 #define UART_UART_H_
 
-#include "../Inc/main.h"
-#include "../Middlewares/Queue/queue.h"
-#include "../Middlewares/Console/console.h"
+#include "../../Inc/main.h"
+#include "../../Middlewares/Queue/queue.h"
+#include "../../Middlewares/Console/console.h"
 
 
 

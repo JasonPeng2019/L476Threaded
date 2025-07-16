@@ -1,7 +1,7 @@
 /*
  * queue.c
  *
- *  Created on: Sep 14, 2024
+ *  Created on: feb 14, 2025
  *      Author: jason.peng
  */
 
@@ -126,7 +126,7 @@ void * Dequeue(Queue * que){
  *
  * @return: None
  */
-void Dequeue_Free(Queue * que){
+void * Dequeue_Free(Queue * que){
 	if (que->Size > 0){
 		Node * traq = que->Head;
 		que->Head = que->Head->Next;

@@ -4,7 +4,8 @@
         "main.h": "c",
         "queue.h": "c",
         "stdbool.h": "c",
-        "stdint.h": "c"
+        "stdint.h": "c",
+        "scheduler.h": "c"
     },
     "C_Cpp.errorSquiggles": "enabled"
 }

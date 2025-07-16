@@ -1,7 +1,7 @@
 /*
  * UART.c
  *
- *  Created on: Sep 19, 2024
+ *  Created on: Feb 19, 2025
  *      Author: jason.peng
  */
 #include <stdlib.h>
@@ -11,7 +11,7 @@
 #include <stdio.h>
 
 #include "UART.h"
-#include "../Middlewares/Scheduler/Scheduler.h"
+#include "../../Middlewares/Scheduler/Scheduler.h"
 #include "main.h"
 
 static bool UART_Callbacks_Initialized = false;
@@ -268,7 +268,7 @@ int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size){
  * @return: size of data received. This should be matched to the size of the data
  * that should have been sent for sensitive applications such as GPS data, etc.
  */
-int8_t UART_Receive(tUART * UART, uint8_t * Data, uint8_t * Data_Size){
+int8_t UART_Receive(tUART * UART, uint8_t * Data, uint8_t * Data_Size, bool * External_Success_Flag){
  // if busy
     *Data_Size = 0;
 
@@ -277,13 +277,12 @@ int8_t UART_Receive(tUART * UART, uint8_t * Data, uint8_t * Data_Size){
     }
 
     if (UART->UART_Handle->RxState == HAL_UART_STATE_BUSY_RX){
-        bool * success_UART_Receive = (bool *)Task_Malloc_Data(UART->Task_ID, sizeof(bool));
-        *success_UART_Receive = false;
+        *External_Success_Flag = false;
         uint8_t * Data_Holder = (uint8_t *)Task_Malloc_Data(UART->Task_ID, Data_Size);
         uint8_t * Data_Size_Holder = (uint8_t *)Task_Malloc_Data(UART->Task_ID, sizeof(*Data_Size));
         memcpy(Data_Holder, Data, Data_Size);
         memcpy(Data_Size_Holder, Data_Size, sizeof(*Data_Size));
-        if (!(UART_Repeat_Receive_Enqueue(UART, Data_Holder, Data_Size_Holder, success_UART_Receive))){
+        if (!(UART_Repeat_Receive_Enqueue(UART, Data_Holder, Data_Size_Holder, External_Success_Flag))){
             printd("Malloc error for UART Receive.");
         };
         // do not need to worry about Data and Data_Size being dangling pointers because they are STATIC buffers

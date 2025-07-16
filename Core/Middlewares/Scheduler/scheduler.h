@@ -1,7 +1,7 @@
 /*
  * scheduler.h
  *
- *  Created on: Jun 15, 2024
+ *  Created on: feb 15, 2025
  *      Author: jason.peng
  */
 #include <stdio.h>
@@ -48,9 +48,12 @@ uint32_t Start_Task(void * task_Function, void * parameters, uint32_t wait_time)
 void Delete_Task(uint32_t Task_ID);
 void Resume_Task(uint32_t Task_ID);
 void Halt_Task(uint32_t Task_ID);
+
 void Modify_Task_Wait_Time(uint32_t Task_ID, uint32_t wait_Time);
 void Modify_Task_Name(uint32_t Task_ID, const char * name);
+
 tScheduler * Return_Scheduler(void);
+
 void * Task_Malloc_Data(uint32_t Task_ID, uint32_t size);
 void Task_Free(uint32_t task_ID, void * data_ptr);
 void Task_Add_Heap_Usage(uint32_t Task_ID, uint32_t data_Size);
