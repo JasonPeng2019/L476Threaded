@@ -23,19 +23,34 @@ tI2C * Init_I2C(I2C_HandleTypeDef * I2C_Handle, uint16_t Device_Address){
 }
 
 bool Reset_I2C(tI2C * I2C){
-    HAL_I2C_DeInit(I2C->I2C_Handle);
-	HAL_I2C_Init(I2C->I2C_Handle);
+    if (!HAL_I2C_DeInit(I2C->I2C_Handle)){
+        return false;
+    }
+	if (!HAL_I2C_Init(I2C->I2C_Handle)){
+        return false;
+    }
 
     I2C->Busy_Flag = false;
 
+    //handle the packet queue
+    while (I2C->Packet_Queue->Size > 0){
+        tI2C_Packet * Curr_Packet = (tI2C_Packet *)Dequeue(I2C->Packet_Queue);
+        free(Curr_Packet->Data);
+        free(Curr_Packet->Success);
+        free(Curr_Packet);
+    }
     free(I2C->Packet_Queue);
     I2C->Packet_Queue = NULL;
     I2C->Packet_Queue = Prep_Queue();
+    if (I2C->Packet_Queue == NULL){
+        return false;
+    }
     
-    Change_Single_Mode(I2C);
+    Change_Single_Mode(I2C);    // abort DMA here, stop it; change to single Rx mode
+    
+    //handle the continuous channel
     memset(I2C->Continuous_Channel->Data, 0, *I2C->Continuous_Channel->Buffer_Size);
-    free(I2C->Continuous_Channel);
-    I2C->Continuous_Channel = NULL;
+
 
     if (I2C->Task_ID != NULL){
         Halt_Task(I2C->Task_ID);
@@ -60,10 +75,35 @@ bool Change_Single_Mode(tI2C * I2C){
     else {
         I2C->Mode = eMode_Single;
         I2C->Busy_Flag = false;
-        
+        HAL_I2C_DMAStop(I2C->I2C_Handle);
+        HAL_I2C_DeInit(I2C->I2C_Handle);
+        if (!HAL_I2C_DeInit(I2C->I2C_Handle)){
+            return false;
+        }
+        if (!HAL_I2C_Init(I2C->I2C_Handle)){
+            return false;
+        }
+        memset(I2C->Continuous_Channel->Data, 0, *I2C->Continuous_Channel->Buffer_Size);
+        HAL_I2C_Master_Receive(I2C->I2C_Handle, I2C->Device_Address, NULL, 0, 1000);
+        return true;
     }
 }
 
+bool Change_Continuous_Mode(tI2C * I2C, tI2C_Continuous_Channel * Channel){
+    if (I2C->Mode == eMode_Continuous){
+        return true;
+    }
+    else{
+        Reset_I2C(I2C);
+        I2C->Mode = eMode_Continuous;
+        I2C->Continuous_Channel = Channel;
+        I2C->Busy_Flag = false;
+        I2C->Packet_Queue = Prep_Queue();
+        if (I2C->Packet_Queue == NULL){
+            return false;
+        }
+    }
+    
 
 bool I2C_Blocking_Write(tI2C * I2C, uint8_t * Data, uint16_t Data_Size, uint32_t Timeout){
     HAL_StatusTypeDef res = HAL_I2C_Master_Transmit(I2C->I2C_Handle, I2C->Device_Address, Data, Data_Size, Timeout);

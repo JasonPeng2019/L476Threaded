@@ -25,7 +25,7 @@ extern "C" {
 
 typedef struct {
     uint8_t * Data; // data array in ascii
-    uint8_t * Data_Size;
+    uint8_t Data_Size; //need to fix; Data size should be fixed.
 } TX_Node;
 
 typedef struct {

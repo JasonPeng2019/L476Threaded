@@ -98,7 +98,8 @@ uint32_t Start_Task(void * task_Function, void * parameters, uint32_t wait_time)
 /**
  * @brief: delete a task from the Task_Queue.
  * Don't update Task IDs, just in case an ID is assigned, a task is deleted
- * and then that ID needs to be referenced.
+ * and then that ID needs to be referenced. DOES NOT delete the task params, in case those need to be used later.
+ * If task params needs to be deleted, delete after the task is deleted.
  * 
  * @params: Task ID to be deleted
  * 
@@ -113,8 +114,6 @@ void Delete_Task(uint32_t Task_ID){
         task_Delete = (tTask*)Queue_Peek(Scheduler->Tasks, counter);
         //if task matches, free the task params and task
         if (task_Delete->Task_ID == Task_ID){
-            void * params_Delete = task_Delete->Task_Params;
-            free(params_Delete);
             free(task_Delete);
             //update the scheduler's size
             Scheduler->Tasks->Size--;

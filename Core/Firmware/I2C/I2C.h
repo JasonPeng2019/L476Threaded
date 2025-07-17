@@ -30,7 +30,7 @@ typedef struct {
     eOp_Type Op_type;
 	uint16_t Memory_Address;
 	uint16_t Memory_Address_Size;
-	uint8_t * Data;
+	uint8_t * Data;  // dynamic alloc data
 	uint16_t Data_Size;
 	void(*Complete_CallBack)(void *);
 	void * CallBack_Data;
@@ -58,7 +58,6 @@ typedef struct {
     uint16_t Device_Address;
     uint32_t Task_ID;
     tI2C_Continuous_Channel * Continuous_Channel;
-    DMA_Channel * DMA_Channel // should be the system DMA channel -  change yourself later.
 }tI2C;
 
 tI2C * Init_I2C(I2C_HandleTypeDef * I2C_Handle, uint16_t Device_Address);
