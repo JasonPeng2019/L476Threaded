@@ -26,6 +26,7 @@ typedef enum {
     eMode_Continuous
 }eI2c_Mode;
 
+// all dynamic alloc data independent of struct
 typedef struct {
     eOp_Type Op_type;
 	uint16_t Memory_Address;
@@ -38,16 +39,18 @@ typedef struct {
     bool * Success;
 }tI2C_Packet;
 
+//all dynamic alloc data should be independent of struct
 typedef struct {
     uint16_t Memory_Address;
     uint16_t Memory_Address_Size;
     uint8_t * Data;
-    uint16_t * Buffer_Size;
+    uint16_t Buffer_Size;
     bool * Success;
-    bool * Buffer_Ready; // when this flag is true, move data to the configured buffer.
+    bool Buffer_Ready; // when this flag is true, move data to the configured buffer.
     void(*Complete_CallBack)(void *);
 	void * CallBack_Data;
     uint8_t Tries_timeout;
+    uint32_t Read_Idx;
 }tI2C_Continuous_Channel;
     
 typedef struct {
@@ -58,6 +61,7 @@ typedef struct {
     uint16_t Device_Address;
     uint32_t Task_ID;
     tI2C_Continuous_Channel * Continuous_Channel;
+    tI2C_Packet * Current_Packet;
 }tI2C;
 
 tI2C * Init_I2C(I2C_HandleTypeDef * I2C_Handle, uint16_t Device_Address);

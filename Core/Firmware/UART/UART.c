@@ -55,10 +55,6 @@ tUART * Init_DMA_UART(UART_HandleTypeDef * UART_Handle){
                                                 // will always proc for new UART TX's. (Immediately)
         //add the UART memory to the memory for the task (right now only holds task structure)
 
-        tUART_Repeat_Receive * UART_Repeat_Handle = Task_Malloc_Data(UART->Task_ID, sizeof(tUART_Repeat_Receive));
-        UART_Repeat_Handle->UART = UART;
-        UART_Repeat_Handle->Repeat_Queue = Prep_Queue();
-        UART_Repeat_Handle->Task_ID = Start_Task(UART_Repeat_RX_Task, UART_Repeat_Handle, 100);
 
         Task_Add_Heap_Usage(UART->Task_ID, (void*)UART);
         Set_Task_Name(UART->Task_ID, "UART RX/TX");
@@ -91,7 +87,6 @@ tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(uint8_t*, uint8_t), void * (*
         UART->UART_Enabled = true;
         UART->TX_Buffer = NULL;
         UART->Currently_Transmitting = false;
-        UART->Repeat_Handle = NULL;
         UART->RX_Buff_Head_Idx = 0;
         UART->RX_Buff_Tail_Idx = 0;
         UART->SUDO_Handler->SUDO_Transmit = Transmit_Func_Ptr;
@@ -99,15 +94,11 @@ tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(uint8_t*, uint8_t), void * (*
         UART->TX_Queue = Prep_Queue();
         UART->Task_ID = Start_Task(UART_Task, (void*)UART, 0);
 
-        tUART_Repeat_Receive * UART_Repeat_Handle = Task_Malloc_Data(UART->Task_ID, sizeof(tUART_Repeat_Receive));
-        UART_Repeat_Handle->UART = UART;
-        UART_Repeat_Handle->Repeat_Queue = Prep_Queue();
-        UART_Repeat_Handle->Task_ID = Start_Task(UART_Repeat_RX_Task, UART_Repeat_Handle, 100);
-
         Task_Add_Heap_Usage(UART->Task_ID, (void*)UART);
         Set_Task_Name(UART->Task_ID, "SUDO UART RX/TX");
     } else {
         printf("func INIT UART: malloc failed");
+        return NULL;
     }    
 }
 
@@ -184,7 +175,7 @@ void Enable_UART(tUART * UART){
 void Disable_UART(tUART * UART){
     UART_Flush_TX(UART);
     // if using DMA
-    if (UART->Use_DMA = true){
+    if (UART->Use_DMA == true){
         if (UART->UART_Handle->RxState == HAL_UART_STATE_BUSY_RX){
             // allow all recieving transmissions to go thru
             printf("func Disable UART: Rx is busy, waiting for RX transmission to finish.\r\n");
@@ -256,7 +247,7 @@ int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size){
  * @brief: Recieves UART Data to the uint8_t data pointer from the Rx Buffer. If UART is not enabled, does not
  * do any recieving and returns false. If UART is busy, requeues the data entry and 
  * tries to recieve it again to the data buffer. Returns false anyways, but requeues 
- * so that the data is not lost.
+ * so that the data is not lost. // needs updating - removed some functionality to make simpler
  * 
  * Because of this, ALL UART Buffer DATA should be a STATIC or MALLOC STORAGE, not
  * temporary storage.
@@ -268,7 +259,7 @@ int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size){
  * @return: size of data received. This should be matched to the size of the data
  * that should have been sent for sensitive applications such as GPS data, etc.
  */
-int8_t UART_Receive(tUART * UART, uint8_t * Data, uint8_t * Data_Size, bool * External_Success_Flag){
+int8_t UART_Receive(tUART * UART, uint8_t * Data, uint8_t * Data_Size){
  // if busy
     *Data_Size = 0;
 
@@ -277,14 +268,6 @@ int8_t UART_Receive(tUART * UART, uint8_t * Data, uint8_t * Data_Size, bool * Ex
     }
 
     if (UART->UART_Handle->RxState == HAL_UART_STATE_BUSY_RX){
-        *External_Success_Flag = false;
-        uint8_t * Data_Holder = (uint8_t *)Task_Malloc_Data(UART->Task_ID, Data_Size);
-        uint8_t * Data_Size_Holder = (uint8_t *)Task_Malloc_Data(UART->Task_ID, sizeof(*Data_Size));
-        memcpy(Data_Holder, Data, Data_Size);
-        memcpy(Data_Size_Holder, Data_Size, sizeof(*Data_Size));
-        if (!(UART_Repeat_Receive_Enqueue(UART, Data_Holder, Data_Size_Holder, External_Success_Flag))){
-            printd("Malloc error for UART Receive.");
-        };
         // do not need to worry about Data and Data_Size being dangling pointers because they are STATIC buffers
         return 0;
     } else {
@@ -298,100 +281,6 @@ int8_t UART_Receive(tUART * UART, uint8_t * Data, uint8_t * Data_Size, bool * Ex
     return *Data_Size;
 }
 
-/**
- * @brief: The Repeating RX Task that repeats the reading process for
- *  any data that was unsuccessfully. 
- *  Peeks at each node in the Repeat_Queue, sees if the "done" flag is
- *  true (basically transmitted successfully). If done, does not transmit
- *  for that recieve node, but rather, gets rid of the node and its data, which
- *  is a tUART_Repeat_Node that holds pointers to various nodes.
- *  Otherwise, receives the signal to the buffer at the Repeat_Queue node.
- * 
- * @params: tUART_Repeat_Receive * struct to hold the Repeat Queue
- * 
- * @return: None
- * 
- */
-
-void UART_Repeat_RX_Task(tUART_Repeat_Receive * UART_Repeat_Handle){
-    Node * curr_Repeat_Node = Queue_Node_Peek(UART_Repeat_Handle->Repeat_Queue, 0);
-    for (int i = 0; i < UART_Repeat_Handle->Repeat_Queue->Size; i++){
-        if (i == 0 && ((tUART_Repeat_Node*)(curr_Repeat_Node->Data))->done == true){
-            Task_Free(UART_Repeat_Handle->Task_ID, ((tUART_Repeat_Node*)(curr_Repeat_Node->Data))->success_Buff);
-            free(curr_Repeat_Node->Data);
-            curr_Repeat_Node->Next = NULL;
-            free(curr_Repeat_Node);
-        }
-        Node * prev = curr_Repeat_Node;
-        // make prev go to the left
-        curr_Repeat_Node = Queue_Peek(UART_Repeat_Handle->Repeat_Queue, i);
-        if (i != 0 && ((tUART_Repeat_Node*)(curr_Repeat_Node->Data))->done == true){
-            prev->Next = curr_Repeat_Node->Next;
-            Task_Free(UART_Repeat_Handle->Task_ID, ((tUART_Repeat_Node*)(curr_Repeat_Node->Data))->success_Buff);
-            free(curr_Repeat_Node->Data);
-            curr_Repeat_Node->Next = NULL;
-            free(curr_Repeat_Node);
-        } else {
-            tUART_Repeat_Node * curr_Repeat_Handle = (tUART_Repeat_Node *)curr_Repeat_Node->Data;
-            UART_Repeat_Receive(UART_Repeat_Handle->UART, curr_Repeat_Handle->Data_Buff,
-            curr_Repeat_Handle->Data_Size_Buff, curr_Repeat_Handle->success_Buff);
-        bool success_Flag = *(curr_Repeat_Handle->success_Buff);
-        if (success_Flag) {
-            curr_Repeat_Handle->done = true;
-            }     
-        }
-    }
-}
-
-/**
- * @brief: Same as UART_Receive, except in the case of a busy transmit, does not enqueue the recieve buffer. 
- * Does not receive or move the receive index.
- * 
- * @params: tUART * UART Handle
- * @params: uint8_t * Data buffer to store received data
- * @params: uint8_t * Ptr to buffer to hold the size of data received.
- * @params: bool * Ptr to buffer to hold if transmit was successful or not. Need this because we don't pass 
- * the buffer holding the success buff, only the data and UART.
- * 
- * @return Size of Data Received.
- * 
- */
-int8_t UART_Repeat_Receive(tUART * UART, uint8_t * Data, uint8_t * Data_Size, bool * Suxx_Buff){
-    *Data_Size = 0;
-
-    if (!UART->UART_Enabled){
-        return 0;
-    }
-
-    if (!(UART->UART_Handle->RxState == HAL_UART_STATE_BUSY_RX)){
-        while (UART->RX_Buff_Tail_Idx != (UART_RX_BUFF_SIZE - UART->UART_Handle->hdmarx->Instance->CNDTR)){
-            Data[*Data_Size++] = UART->RX_Buffer[UART->RX_Buff_Tail_Idx++];
-            if (UART->RX_Buff_Tail_Idx >= UART_RX_BUFF_SIZE){
-                UART->RX_Buff_Tail_Idx = 0;
-            }
-            if (*Data_Size != 0){
-                *Suxx_Buff = true;
-            }
-        }
-    }
-    return *Data_Size;
-}
-
-/*returns 1 if successful, 0 if otherwise*/
-/**
- * @brief: Enqueues a new Repeat Node in the Repeat Handle (which )
- */
-uint8_t UART_Repeat_Receive_Enqueue(tUART * UART, uint8_t * Data, uint8_t * Data_Size, bool * UART_RX_Flag){
- // get UART to have its own repeat HAndle
- // enqueue's to that UART's repeat Handle
- tUART_Repeat_Receive * Repeat_Handle = UART->Repeat_Handle;
- tUART_Repeat_Node * new_Repeat_Node = (tUART_Repeat_Node*)(UART->Task_ID, sizeof(tUART_Repeat_Node));
- new_Repeat_Node->Data_Buff = Data;
- new_Repeat_Node->Data_Size_Buff = Data_Size;
- new_Repeat_Node->success_Buff = UART_RX_Flag;
- new_Repeat_Node->done = false;
- return Enqueue(Repeat_Handle->Repeat_Queue, new_Repeat_Node);
-}
 
 int8_t UART_SUDO_Recieve(tUART * UART, uint8_t * Data, uint8_t Data_Size){
     return UART->SUDO_Handler->SUDO_Receive(UART, Data, Data_Size);
@@ -422,7 +311,7 @@ void UART_Flush_TX(tUART * uart)
 
 	while(uart->TX_Queue->Size != 0 || uart->Currently_Transmitting)
 	{
-		UART_Tasks((void *)uart);
+		UART_Task((void *)uart);
 	}
 }
 
