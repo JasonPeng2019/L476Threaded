@@ -16,14 +16,25 @@
 
 #include <string.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include "console.h"
 #include "main.h"
 #include "stm32l476xx.h"
 #include "stm32l4xx_hal.h"
-#include "../Scheduler/scheduler.h"
+#include "tx_api.h"
 #include "../Queue/queue.h"
 
-static tConsole * console;
+static tConsole console_data;
+static tConsole * console = &console_data;
+
+/* ThreadX thread objects and stacks */
+#define CONSOLE_THREAD_STACK_SIZE 512
+static TX_THREAD rx_thread;
+static TX_THREAD debug_thread;
+static TX_THREAD complete_thread;
+static UCHAR rx_thread_stack[CONSOLE_THREAD_STACK_SIZE];
+static UCHAR debug_thread_stack[CONSOLE_THREAD_STACK_SIZE];
+static UCHAR complete_thread_stack[CONSOLE_THREAD_STACK_SIZE];
 uint8_t data[UART_RX_BUFF_SIZE];
 uint16_t data_size;
 static void RX_Task(void * NULL_Ptr);
@@ -33,6 +44,10 @@ static void Clear_Screen(void);
 static void Pause_Commands(void);
 static void Resume_Commands(void);
 static void Quit_Commands(void);
+static VOID RX_Thread_Entry(ULONG thread_input);
+static VOID Debug_Thread_Entry(ULONG thread_input);
+static VOID Complete_Thread_Entry(ULONG thread_input);
+static void Null_Task(void * NULL_Ptr);
 
 static bool RX_Buff_MAX_SURPASSED = false;
 
@@ -50,33 +65,36 @@ void Init_Console(tUART * UART){
     console->UART_Handler = UART;
     console->RX_Buff_Idx = 0;
     console->Console_State = eConsole_Wait_For_Commands;
-    console->RX_Task_Id = Start_Task(RX_Task, NULL, 0);
-    Set_Task_Name(console->RX_Task_Id, "CONSOLE_RX");
-    console->Debug_Task_Id = Start_Task(Debug_Runner_Task, NULL, 200); // execute every debug command every 200 ms
+    tx_thread_create(&rx_thread, "CONSOLE_RX", RX_Thread_Entry, 0,
+                     rx_thread_stack, CONSOLE_THREAD_STACK_SIZE,
+                     5, 5, TX_NO_TIME_SLICE, TX_AUTO_START);
+    tx_thread_create(&debug_thread, "CONSOLE_DEBUG", Debug_Thread_Entry, 0,
+                     debug_thread_stack, CONSOLE_THREAD_STACK_SIZE,
+                     5, 5, TX_NO_TIME_SLICE, TX_AUTO_START); // execute every debug command every 200 ms
     console->Console_Commands = Prep_Queue();
     console->Running_Repeat_Commands = Prep_Queue();
     Add_Console_Command("clear", "Clear the screen", Clear_Screen, NULL);
     printd("\r\nInput Command: \r\n");
     console->Complete_Task = Null_Task;
-    // since console->Complete_Task is not a repeating task, don't need to exe anything
-    console->Complete_Task_Id = Start_Task(console->Complete_Task, NULL, 0);
-    Set_Task_Name(console->Complete_Task_Id, "CONSOLE_CMD");
-} 
+    tx_thread_create(&complete_thread, "CONSOLE_CMD", Complete_Thread_Entry, 0,
+                     complete_thread_stack, CONSOLE_THREAD_STACK_SIZE,
+                     5, 5, TX_NO_TIME_SLICE, TX_AUTO_START);
+}
 // one console to handle all the full commands, each additional call is a new console
 // new console killed after debug task ended
 // one main console to handle all the tasks RX, TX, full tasks, and keep track of main queues (Console commands to execute, )
 // Description should be formatted as follows: str[] = "HELLOO WORLDDDD"
 tConsole_Command * Init_Reg_Command(const char * command_Name, const char * Description, void * Call_Function, void * Call_Params){
-    tConsole_Command * new_Command = (tConsole_Command *)Task_Malloc_Data(console->Complete_Task_Id, sizeof(tConsole_Command));
+    tConsole_Command * new_Command = (tConsole_Command *)malloc(sizeof(tConsole_Command));
     // if malloc successful:
     if(new_Command != NULL){
         // malloc for the command->Command_Name
-        new_Command->Command_Name = (const char *)Task_Malloc_Data(console->Complete_Task_Id, sizeof(char)*(strlen(command_Name)+1));
+        new_Command->Command_Name = (const char *)malloc(sizeof(char)*(strlen(command_Name)+1));
         strcpy(new_Command->Command_Name, command_Name);
         //if malloc successful:
         if (new_Command->Command_Name != NULL){
         //malloc for the description
-            new_Command->Description = (const char *)Task_Malloc_Data(console->Complete_Task_Id, sizeof(char)*(strlen(Description)+1));
+            new_Command->Description = (const char *)malloc(sizeof(char)*(strlen(Description)+1));
             strcpy(new_Command->Description, Description);
             //initialize call function & init call params
             new_Command->Call_Function = Call_Function;
@@ -97,16 +115,16 @@ tConsole_Command * Init_Debug_Command(const char * command_Name, const char * De
     void * Call_Function, void * Call_Params, void * Halt_Function, void * Halt_Params, 
     void * Resume_Function, void * Resume_Params, void * Stop_Function, void * Stop_Params){
     //malloc new command
-    tConsole_Command * new_Command = (tConsole_Command *)Task_Malloc_Data(console->Complete_Task_Id, sizeof(tConsole_Command));
+    tConsole_Command * new_Command = (tConsole_Command *)malloc(sizeof(tConsole_Command));
     // if malloc successful
     if (new_Command != NULL){
         // malloc for the command->Command Name
-        new_Command->Command_Name = (const char *)Task_Malloc_Data(console->Complete_Task_Id, sizeof(char)*strlen(command_Name));
+        new_Command->Command_Name = (const char *)malloc(sizeof(char)*strlen(command_Name));
         strcpy(new_Command->Command_Name, command_Name);
         //if malloc successful
         if (new_Command->Command_Name != NULL){
             //initialize description
-            new_Command->Description = (const char *)Task_Malloc_Data(console->Complete_Task_Id, sizeof(char)*strlen(Description));
+            new_Command->Description = (const char *)malloc(sizeof(char)*strlen(Description));
             strcpy(new_Command->Description, Description);
             //initialize call function & init call params
             new_Command->Call_Function = Call_Function;
@@ -368,6 +386,47 @@ void Quit_Commands(void){
 
 void Resume_Commands(void){
     console->Console_State = eConsole_Resume_Commands;
+    return;
+}
+
+
+/* ThreadX thread entry functions */
+static VOID RX_Thread_Entry(ULONG thread_input)
+{
+    (void)thread_input;
+    while (1)
+    {
+        RX_Task(NULL);
+        tx_thread_sleep(1);
+    }
+}
+
+static VOID Debug_Thread_Entry(ULONG thread_input)
+{
+    (void)thread_input;
+    while (1)
+    {
+        Debug_Runner_Task(NULL);
+        tx_thread_sleep(200);
+    }
+}
+
+static VOID Complete_Thread_Entry(ULONG thread_input)
+{
+    (void)thread_input;
+    while (1)
+    {
+        if (console->Complete_Task != NULL)
+        {
+            console->Complete_Task(NULL);
+        }
+        tx_thread_sleep(1);
+    }
+}
+
+static void Null_Task(void * NULL_Ptr)
+{
+    (void)NULL_Ptr;
     return;
 }
 
