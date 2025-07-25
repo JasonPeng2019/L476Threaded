@@ -59,9 +59,6 @@ typedef struct {
     tUART * UART_Handler;
     uint8_t RX_Buff[MAX_CONSOLE_BUFF_SIZE];
     uint32_t RX_Buff_Idx;
-    uint32_t RX_Task_Id;
-    uint32_t Debug_Task_Id;
-    uint32_t Complete_Task_Id;
     void (*Complete_Task)(void *);
     eConsole_State Console_State;
     Queue * Console_Commands;
