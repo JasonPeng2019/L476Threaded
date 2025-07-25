@@ -297,7 +297,7 @@ void I2C_Task(tI2C * I2C){
             }
         }
     } else if (I2C->Mode == eMode_Continuous){
-        return;
+        
         // implement channel later if needed
     }
 }
