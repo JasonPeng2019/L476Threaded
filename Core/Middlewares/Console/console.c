@@ -18,11 +18,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include "console.h"
-#include "main.h"
-#include "stm32l476xx.h"
-#include "stm32l4xx_hal.h"
-#include "tx_api.h"
-#include "../Queue/queue.h"
+
 
 static tConsole console_data;
 static tConsole * console = &console_data;
@@ -35,6 +31,8 @@ static TX_THREAD complete_thread;
 static UCHAR rx_thread_stack[CONSOLE_THREAD_STACK_SIZE];
 static UCHAR debug_thread_stack[CONSOLE_THREAD_STACK_SIZE];
 static UCHAR complete_thread_stack[CONSOLE_THREAD_STACK_SIZE];
+
+
 uint8_t data[UART_RX_BUFF_SIZE];
 uint16_t data_size;
 static void RX_Task(void * NULL_Ptr);
@@ -44,10 +42,6 @@ static void Clear_Screen(void);
 static void Pause_Commands(void);
 static void Resume_Commands(void);
 static void Quit_Commands(void);
-static VOID RX_Thread_Entry(ULONG thread_input);
-static VOID Debug_Thread_Entry(ULONG thread_input);
-static VOID Complete_Thread_Entry(ULONG thread_input);
-static void Null_Task(void * NULL_Ptr);
 
 static bool RX_Buff_MAX_SURPASSED = false;
 
@@ -65,11 +59,12 @@ void Init_Console(tUART * UART){
     console->UART_Handler = UART;
     console->RX_Buff_Idx = 0;
     console->Console_State = eConsole_Wait_For_Commands;
+
     tx_thread_create(&rx_thread, "CONSOLE_RX", RX_Thread_Entry, 0,
-                     rx_thread_stack, CONSOLE_THREAD_STACK_SIZE,
+                     rx_thread_stack, TX_APP_THREAD_STACK_SIZE,
                      5, 5, TX_NO_TIME_SLICE, TX_AUTO_START);
     tx_thread_create(&debug_thread, "CONSOLE_DEBUG", Debug_Thread_Entry, 0,
-                     debug_thread_stack, CONSOLE_THREAD_STACK_SIZE,
+                     debug_thread_stack, TX_APP_THREAD_STACK_SIZE,
                      5, 5, TX_NO_TIME_SLICE, TX_AUTO_START); // execute every debug command every 200 ms
     console->Console_Commands = Prep_Queue();
     console->Running_Repeat_Commands = Prep_Queue();
@@ -77,7 +72,7 @@ void Init_Console(tUART * UART){
     printd("\r\nInput Command: \r\n");
     console->Complete_Task = Null_Task;
     tx_thread_create(&complete_thread, "CONSOLE_CMD", Complete_Thread_Entry, 0,
-                     complete_thread_stack, CONSOLE_THREAD_STACK_SIZE,
+                     complete_thread_stack, TX_APP_THREAD_STACK_SIZE,
                      5, 5, TX_NO_TIME_SLICE, TX_AUTO_START);
 }
 // one console to handle all the full commands, each additional call is a new console

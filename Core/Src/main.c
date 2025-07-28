@@ -134,11 +134,14 @@ int main(void)
   MX_NVIC_Init();
   /* USER CODE BEGIN 2 */
 
+
   /* USER CODE END 2 */
 
   MX_ThreadX_Init();
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+  // PUT SYSTEM INITS HERE, SINCE DEPEND ON THREADX
   while (1)
   {
     /* USER CODE END WHILE */

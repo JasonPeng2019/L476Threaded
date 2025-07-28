@@ -13,8 +13,9 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "../../HAL/UART.h"
+#include "../../Firmware/UART/UART.h"
 #include "../Queue/queue.h"
+#include "main.h"
 
 
 #ifdef __cplusplus

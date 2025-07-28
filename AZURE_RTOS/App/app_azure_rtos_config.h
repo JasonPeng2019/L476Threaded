@@ -43,10 +43,10 @@ extern "C" {
 
 #define USE_STATIC_ALLOCATION                    1
 
-#define TX_APP_MEM_POOL_SIZE                     1024
+//#define TX_APP_MEM_POOL_SIZE                     16384
 
 /* USER CODE BEGIN EC */
-
+//DELETE THIS TX_APP_MEM_POOL_SIZE
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/

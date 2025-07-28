@@ -50,12 +50,13 @@
 #if defined ( __ICCARM__ )
 #pragma data_alignment=4
 #endif
-__ALIGN_BEGIN static UCHAR tx_byte_pool_buffer[TX_APP_MEM_POOL_SIZE] __ALIGN_END;
+static UCHAR tx_byte_pool_buffer[TX_APP_MEM_POOL_SIZE] __attribute__((aligned (4)));
 static TX_BYTE_POOL tx_app_byte_pool;
 
 #endif
 
 /* USER CODE BEGIN PV */
+//static UCHAR tx_byte_pool_buffer[TX_APP_MEM_POOL_SIZE] __attribute__((aligned (4)));
 
 /* USER CODE END PV */
 
@@ -102,7 +103,7 @@ VOID tx_application_define(VOID *first_unused_memory)
     }
 
     /* USER CODE BEGIN  App_ThreadX_Init_Success */
-
+    rtos_objects_create(first_unused_memory);
     /* USER CODE END  App_ThreadX_Init_Success */
 
   }
