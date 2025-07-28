@@ -13,9 +13,8 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
-#include <stdlib.h>
-#include <stdio.h>
+
+#include "middlewares_includes.h"
 
 
 typedef struct {
