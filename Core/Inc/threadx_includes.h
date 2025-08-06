@@ -4,7 +4,7 @@
 #include "app_threadx.h"
 #include "rtos_objects.h"
 #include "tx_user.h"
-#include "tx_api.h"
-#include "app_azure_rtos.h"
+#include "Middlewares/ST/threadx/common/inc/tx_api.h"
+#include "AZURE_RTOS/App/app_azure_rtos.h"
 
 #endif

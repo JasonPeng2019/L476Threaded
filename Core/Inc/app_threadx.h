@@ -30,7 +30,7 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "threadx_includes.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -61,7 +61,7 @@ extern "C" {
 
 
 /*--------------------------------------------MUTEX--------------------------------------------*/
-
+#define MUTEX_DEFAULT_WAIT                      3500
 /*--------------------------------------------MUTEX--------------------------------------------*/
 
 
@@ -84,9 +84,13 @@ extern "C" {
 
 
 /*--------------------------------------------MEMORY MANAGEMENT--------------------------------------------*/
-#define TX_APP_MEM_POOL_SIZE                    16384
+#define TX_APP_MEM_POOL_SIZE                    55296
 #define TX_APP_BLOCK_SIZE                       64
-#define TX_APP_BLOCK_COUNT                      128
+#define TX_APP_BLOCK_COUNT                      50
+#define TX_APP_LARGE_BLOCK_SIZE                 128
+#define TX_APP_LARGE_BLOCK_COUNT                25
+
+// May need a second BLOCK POOL for LORA - up to 2 KB for LORA, or if not parsing, more like 8 KB
 
 /*--------------------------------------------MEMORY MANAGEMENT--------------------------------------------*/
 

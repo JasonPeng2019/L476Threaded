@@ -73,7 +73,9 @@ static TX_BYTE_POOL tx_app_byte_pool;
 VOID tx_application_define(VOID *first_unused_memory)
 {
   /* USER CODE BEGIN  tx_application_define_1*/
-
+#if (USE_STATIC_ALLOCATION == 1)
+  memset(tx_byte_pool_buffer, 0xEF, TX_APP_MEM_POOL_SIZE);  // "paint" memory
+#endif
   /* USER CODE END  tx_application_define_1 */
 #if (USE_STATIC_ALLOCATION == 1)
   UINT status = TX_SUCCESS;
@@ -103,7 +105,7 @@ VOID tx_application_define(VOID *first_unused_memory)
     }
 
     /* USER CODE BEGIN  App_ThreadX_Init_Success */
-    rtos_objects_create(first_unused_memory);
+    rtos_objects_create(first_unused_memory); // create block pool, create threads, other statically alloc structs
     /* USER CODE END  App_ThreadX_Init_Success */
 
   }

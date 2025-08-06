@@ -56,7 +56,9 @@ extern "C" {
 
 /* Private defines -----------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+extern TX_BYTE_POOL tx_app_byte_pool;
+extern UCHAR tx_byte_pool_buffer[TX_APP_MEM_POOL_SIZE];
+VOID tx_application_define(VOID *first_unused_memory);
 /* USER CODE END PD */
 
 #ifdef __cplusplus

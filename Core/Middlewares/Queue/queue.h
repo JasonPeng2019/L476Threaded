@@ -16,26 +16,27 @@ extern "C" {
 
 #include "middlewares_includes.h"
 
+typedef struct Queue Queue;
 
-typedef struct {
+typedef struct Node {
 	void * Data;
-	void * Next;
+	struct Node * Next;
 } Node;
 
 typedef struct {
 	Node * Head;
 	Node * Tail;
 	uint32_t Size;
+	TX_MUTEX Lock;
 } Queue;
 
-Node * Create_Node(void * data);
 Queue * Prep_Queue(void);
-uint8_t Enqueue(Queue * que, void * data);
+bool Enqueue(Queue * que, void * data);
 void * Dequeue(Queue * que);
-void Dequeue_Free(Queue * que);
+bool  Dequeue_Free(Queue * que);
 void * Queue_Peek(Queue * que, uint32_t index);
-Node * Node_Peek(Queue * que, uint32_t index);
-uint32_t Free_Queue(Queue * que);
+Node * Queue_Node_Peek(Queue * que, uint32_t index);
+bool Free_Queue(Queue * que);
 
 #ifdef __cplusplus
 }
