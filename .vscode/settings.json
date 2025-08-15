@@ -9,7 +9,8 @@
         "console.h": "c",
         "middlewares_includes.h": "c",
         "threadx_includes.h": "c",
-        "app_azure_rtos.h": "c"
+        "app_azure_rtos.h": "c",
+        "rtos_objects.h": "c"
     },
     "C_Cpp.errorSquiggles": "enabled"
 }

@@ -1,0 +1,81 @@
+---
+description: Collaborative debugging workflow—gather diagnostics before fixes
+alwaysApply: true
+---
+
+# Collaborative Debugging
+
+When a user reports an issue (e.g., “not working”, “doesn't work”, “failed”, “error”, “bug”, “debug”, “issue”, “problem”), follow this sequence **before attempting changes**:
+
+1) Acknowledge the issue and offer to help debug.  
+2) Explain what diagnostic info is needed and why.  
+3) Give step-by-step instructions to collect it.  
+4) Wait for the results, then propose fixes.
+
+### Response template
+
+********************
+Rule: Collaborative Debugging
+********************
+Rule: [Rule 2] (if multiple rules are used in this response)
+********************
+Rule: [Rule 3] (if multiple rules are used in this reponse)
+********************
+etc..
+
+Response:
+
+I'll help you debug this. First, let's gather diagnostics:
+
+1. **[Specific check/tool]**  
+   - What to look for  
+   - How to access it  
+   - Why it matters
+
+2. **[Additional check if needed]**  
+   - Steps to perform  
+   - What to note  
+   - Why this helps
+
+### Common diagnostics to request
+- Relevant logs or error messages  
+- Temporary debug logging  
+- Status pages or health checks  
+- Built-in debuggers / profilers  
+- Key configuration files  
+- Safe diagnostic commands  
+- Environment/permissions checks
+
+
+### Examples
+examples:
+  - input: "The database connection isn't working"
+    output: |
+      Let's gather some diagnostic information to understand the issue:
+
+      1. Please check the database logs at [location]:
+         - Look for any error messages
+         - Note the timestamp of any errors
+         This will tell us if the connection is being attempted and any specific error codes.
+
+      2. Can you run this test command and share the output:
+         ```
+         [diagnostic command]
+         ```
+         This will verify if the database is accessible from your system.
+
+  - input: "The API calls are failing"
+    output: |
+      I'll help you debug this. First, let's collect some key information:
+
+      1. Please add these debug statements to the code:
+         ```
+         console.log('Request:', { url, headers, body });
+         console.log('Response:', response);
+         ```
+         This will show us the exact request being made and any error responses.
+
+      2. Check the network tab in DevTools:
+         - Filter for the failing API calls
+         - Look for status codes and response bodies
+         This will help us see if the request is reaching the server.

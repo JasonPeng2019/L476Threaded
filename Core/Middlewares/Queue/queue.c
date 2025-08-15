@@ -14,7 +14,7 @@
   */
  static Node *Create_Node(void *data) {
      Node *node = NULL;
-     if (tx_byte_allocate(&tx_app_byte_pool, (VOID **)&node, sizeof(Node), TX_NO_WAIT) != TX_SUCCESS) {
+     if (tx_block_allocate(&tx_app_block_pool, (VOID **)&node, TX_NO_WAIT) != TX_SUCCESS) {
          printd("malloc error\r\n");
          return NULL;
      }
@@ -39,7 +39,7 @@
              printd("Failed to release memory\r\n");
          }
      }
-     if (tx_byte_release(node) != TX_SUCCESS) {
+     if (tx_block_release(node) != TX_SUCCESS) {
          printd("Failed to release node memory\r\n");
          return false;
      }
@@ -55,7 +55,7 @@
   */
  Queue *Prep_Queue(void) {
      Queue *que = NULL;
-     if (tx_byte_allocate(&tx_app_byte_pool, (VOID **)&que, sizeof(Queue), TX_NO_WAIT) != TX_SUCCESS) {
+     if (tx_block_allocate(&tx_app_large_block_pool, (VOID **)&que, TX_NO_WAIT) != TX_SUCCESS) {
          printd("Prep_Queue allocate error\r\n");
          return NULL;
      }
@@ -64,7 +64,7 @@
      que->Size = 0;
      if (tx_mutex_create(&que->Lock, "QueueLock", TX_INHERIT) != TX_SUCCESS) {
          printd("Prep_Queue mutex_create error\r\n");
-         tx_byte_release(que);
+         tx_block_release(que);
          return NULL;
      }
      return que;
@@ -88,7 +88,7 @@
      }
      if (tx_mutex_get(&que->Lock, TX_WAIT_FOREVER) != TX_SUCCESS) {
          printd("Enqueue mutex_get error\r\n");
-         tx_byte_release(node);
+         tx_block_release(node);
          return false;
      }
      if (que->Size == 0) {
@@ -131,7 +131,7 @@
      tx_mutex_put(&que->Lock);
  
      /* Free only the node; data is returned to caller */
-     if (tx_byte_release(node) != TX_SUCCESS) {
+     if (tx_block_release(node) != TX_SUCCESS) {
          printd("tx_byte_release error\r\n");
      }
      return data;
@@ -216,7 +216,7 @@
      }
      /* Delete the mutex and free the queue object */
      tx_mutex_delete(&que->Lock);
-     if (tx_byte_release(que) != TX_SUCCESS) {
+     if (tx_block_release(que) != TX_SUCCESS) {
          printd("tx_byte_release error\r\n");
      }
      return true;

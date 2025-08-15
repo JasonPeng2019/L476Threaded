@@ -55,7 +55,7 @@ extern "C" {
 
 /*--------------------------------------------THREADS--------------------------------------------*/
 #define TX_APP_THREAD_STACK_SIZE                2048
-#define TX_SMALL_APP_THREAD_STACK_SIZE          1024
+#define TX_SMALL_APP_THREAD_STACK_SIZE          416
 /*--------------------------------------------THREADS--------------------------------------------*/
 
 
@@ -85,10 +85,12 @@ extern "C" {
 
 /*--------------------------------------------MEMORY MANAGEMENT--------------------------------------------*/
 #define TX_APP_MEM_POOL_SIZE                    55296
-#define TX_APP_BLOCK_SIZE                       64
-#define TX_APP_BLOCK_COUNT                      50
+#define TX_APP_BLOCK_SIZE                       16
+#define TX_APP_BLOCK_COUNT                      100
+#define TX_APP_MID_BLOCK_SIZE                   64
+#define TX_APP_MID_BLOCK_COUNT                  20
 #define TX_APP_LARGE_BLOCK_SIZE                 128
-#define TX_APP_LARGE_BLOCK_COUNT                25
+#define TX_APP_LARGE_BLOCK_COUNT                20
 
 // May need a second BLOCK POOL for LORA - up to 2 KB for LORA, or if not parsing, more like 8 KB
 

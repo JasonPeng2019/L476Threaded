@@ -61,6 +61,7 @@ typedef struct {
     uint8_t RX_Buff[MAX_CONSOLE_BUFF_SIZE];
     uint32_t RX_Buff_Idx;
     void (*Complete_Task)(void *);
+    bool Complete_Need_Update;
     eConsole_State Console_State;
     Queue * Console_Commands;
     Queue * Running_Repeat_Commands;
@@ -72,7 +73,6 @@ void Quit_Commands(void);
 void Resume_Commands(void);
 void Pause_Commands(void);
 static void Debug_Runner_Task(void * NULL_Ptr);
-static void Process_Commands(uint8_t * data_ptr, uint16_t command_size);
 static void RX_Task(void * NULL_Ptr);
 void printd(const char* format, ...);
 static void Clear_Screen(void);
