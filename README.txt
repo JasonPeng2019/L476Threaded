@@ -57,3 +57,14 @@ To do: start UART_Repeat_Task and repeathandlestruct
     // is backend knowledge needed?
     // move to backend with Justin; have him teach me, work with him, etc.
     // ask vaibhav to move onto the project
+
+
+
+Things to check on feature functionality:
+issues:
+1) Priority inversion
+2) Mutex/deadlocks
+3) Memory leaks
+4) Further bugs
+5) Does it preserve all features
+6) Preserve critical sections, such as when reading UART data from the buffer

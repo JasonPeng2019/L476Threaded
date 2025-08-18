@@ -22,6 +22,8 @@
  * 2) need to make console work with threadX according to recommendations
  */
 
+ 
+
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -365,16 +367,14 @@ static void RX_Task(void * NULL_Ptr){
                 //command itself has ptr to the actual quit function
                 curr_command = Queue_Peek(console->Running_Repeat_Commands, i);
                 curr_command->Stop_Function(curr_command->Stop_Params);              
-                }
-            console->Console_State = eConsole_Wait_For_Commands;
             }
+            console->Console_State = eConsole_Wait_For_Commands;
         }
+    }
          
         memset(data, 0, UART_RX_BUFF_SIZE);
         data_size = 0;
         console->RX_Buff_Idx = 0;
-
-    }
 }
 
     // design: if not a debug command, dont add to running_repeat

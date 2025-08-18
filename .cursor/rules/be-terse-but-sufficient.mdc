@@ -18,7 +18,7 @@ alwaysApply: true
 Do not watch out for maxing out the context window in your response. Just try to give the best answer, and if the context window maxes out mid-response or mid-thought, just respond with "Context_Window_Maxed" so I know to change the question.
 
 **Default style**
-- Answer first in minimal lines needed to fully explain the concept unless the user writes “Please go into detail.”
+- Answer first in minimal lines needed to fully explain the concept unless the user writes “go into detail.”
 - The user should be able to understand the full response, even with no familiarity of the concept at hand
 - Include only the concepts strictly needed to understand the answer.
 - Do **not** generate new code unless the user explicitly asks.

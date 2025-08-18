@@ -222,3 +222,16 @@
      return true;
  }
  
+/**
+ * @brief: get pointer to the queue's mutex for external locking
+ *
+ * @params: que pointer to Queue
+ *
+ * @return: pointer to the queue's mutex, or NULL if queue is NULL
+ */
+TX_MUTEX *Queue_Get_Mutex(Queue *que) {
+    if (que == NULL) {
+        return NULL;
+    }
+    return &que->Lock;
+}
