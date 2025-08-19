@@ -36,6 +36,8 @@ void * Dequeue(Queue * que);
 bool  Dequeue_Free(Queue * que);
 void * Queue_Peek(Queue * que, uint32_t index);
 Node * Queue_Node_Peek(Queue * que, uint32_t index);
+void * Queue_Peek_Unsafe(Queue * que, uint32_t index);
+Node * Queue_Node_Peek_Unsafe(Queue * que, uint32_t index);
 bool Free_Queue(Queue * que);
 TX_MUTEX * Queue_Get_Mutex(Queue * que);
 

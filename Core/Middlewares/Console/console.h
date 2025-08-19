@@ -43,8 +43,8 @@ typedef enum{
 
 typedef struct {
     eCommand_Type Command_Type;
-    const char * Command_Name;
-    const char * Description;
+    char * Command_Name;
+    char * Description;
     void (*Call_Function)(void *);
     void (*Halt_Function)(void *);
     void (*Resume_Function)(void *);
@@ -54,6 +54,7 @@ typedef struct {
     void * Resume_Params;
     void * Stop_Params;
     uint32_t Repeat_Time;
+    ULONG    Last_Run_Tick; /* tx_time_get() tick when command last ran; 0 = never */
 } tConsole_Command;
 
 typedef struct {

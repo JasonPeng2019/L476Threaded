@@ -87,7 +87,7 @@ void rtos_objects_create(VOID *first_unused_memory);
 
 /* Thread entry function */
 void app_thread_entry(ULONG thread_input);
-static UINT Safe_Block_Release(VOID *block_ptr);
-static UINT Safe_Block_Allocate(TX_BLOCK_POOL *pool, VOID **block_ptr, ULONG wait_option);
+UINT Safe_Block_Release(VOID *block_ptr);
+UINT Safe_Block_Allocate(TX_BLOCK_POOL *pool, VOID **block_ptr, ULONG wait_option);
 
 #endif /* RTOS_OBJECTS_H */

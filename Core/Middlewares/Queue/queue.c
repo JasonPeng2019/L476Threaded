@@ -223,6 +223,42 @@
  }
  
 /**
+ * @brief: peek at data at given index without removing (UNSAFE - no mutex)
+ * WARNING: Only call when you already hold the queue mutex externally
+ *
+ * @params: que pointer to Queue, index of element
+ *
+ * @return: data pointer or NULL
+ */
+void *Queue_Peek_Unsafe(Queue *que, uint32_t index) {
+    Node *node = Queue_Node_Peek_Unsafe(que, index);
+    return (node != NULL) ? node->Data : NULL;
+}
+
+/**
+ * @brief: peeks at the NODE of [index] item (UNSAFE - no mutex)
+ * WARNING: Only call when you already hold the queue mutex externally
+ *
+ * @params: que pointer to Queue, index of item to peek at
+ *
+ * @return: Node signature of queued node
+ */
+Node *Queue_Node_Peek_Unsafe(Queue *que, uint32_t index) {
+    if (que == NULL) {
+        return NULL;
+    }
+    if (index >= que->Size) {
+        printd("Queue_Node_Peek_Unsafe index out of range\r\n");
+        return NULL;
+    }
+    Node *trav = que->Head;
+    for (uint32_t i = 0; i < index; ++i) {
+        trav = trav->Next;
+    }
+    return trav;
+}
+
+/**
  * @brief: get pointer to the queue's mutex for external locking
  *
  * @params: que pointer to Queue

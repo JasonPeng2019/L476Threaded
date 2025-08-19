@@ -26,13 +26,13 @@ TX_EVENT_FLAGS_GROUP console_events;
 
 /* RX buffer for DMA */
 uint8_t data[UART_RX_BUFF_SIZE];
-uint16_t data_size;
+uint8_t data_size;
 
 /* Static flags */
 static bool RX_Buff_MAX_SURPASSED = false;
 
 /* Private function declarations */
-static void Process_Commands(uint8_t * data_ptr, uint16_t command_size);
+static void Process_Commands(uint8_t * data_ptr, uint8_t command_size);
 static void Clear_Screen(void * unused);
 static void Null_Task(void * NULL_Ptr);
 
@@ -59,7 +59,7 @@ void Thread_Console_Init(tUART * UART)
     status = tx_event_flags_create(&console_events, "CONSOLE_EVENTS");
     if (status != TX_SUCCESS) {
         printd("ERROR: Console events creation failed: %u\r\n", status);
-        return;
+        goto cleanup_mutex;
     }
     
     /* Initialize queues */
@@ -68,7 +68,7 @@ void Thread_Console_Init(tUART * UART)
     
     if (!console->Console_Commands || !console->Running_Repeat_Commands) {
         printd("ERROR: Queue initialization failed\r\n");
-        return;
+        goto cleanup_queues;
     }
     
     /* Create threads with proper priorities */
@@ -77,7 +77,7 @@ void Thread_Console_Init(tUART * UART)
                              3, 3, TX_NO_TIME_SLICE, TX_AUTO_START);
     if (status != TX_SUCCESS) {
         printd("ERROR: RX thread creation failed: %u\r\n", status);
-        return;
+        goto cleanup_queues;
     }
     
     status = tx_thread_create(&debug_thread, "CONSOLE_DEBUG", Debug_Thread_Entry, 0,
@@ -85,7 +85,7 @@ void Thread_Console_Init(tUART * UART)
                              5, 5, TX_NO_TIME_SLICE, TX_AUTO_START);
     if (status != TX_SUCCESS) {
         printd("ERROR: Debug thread creation failed: %u\r\n", status);
-        return;
+        goto cleanup_rx_thread;
     }
     
     status = tx_thread_create(&complete_thread, "CONSOLE_CMD", Complete_Thread_Entry, 0,
@@ -93,13 +93,28 @@ void Thread_Console_Init(tUART * UART)
                              4, 4, TX_NO_TIME_SLICE, TX_AUTO_START);
     if (status != TX_SUCCESS) {
         printd("ERROR: Complete thread creation failed: %u\r\n", status);
-        return;
+        goto cleanup_debug_thread;
     }
     
     /* Add default commands */
     Console_Add_Command("clear", "Clear the screen", Clear_Screen, NULL);
     
     printd("\r\nThreadX Console Initialized\r\nInput Command: \r\n");
+    return;
+
+cleanup_debug_thread:
+    tx_thread_terminate(&debug_thread);
+    tx_thread_delete(&debug_thread);
+cleanup_rx_thread:
+    tx_thread_terminate(&rx_thread);
+    tx_thread_delete(&rx_thread);
+cleanup_queues:
+    if (console->Console_Commands) Free_Queue(console->Console_Commands);
+    if (console->Running_Repeat_Commands) Free_Queue(console->Running_Repeat_Commands);
+cleanup_events:
+    tx_event_flags_delete(&console_events);
+cleanup_mutex:
+    tx_mutex_delete(&console_mutex);
 }
 
 void Thread_Console_Shutdown(void)
@@ -116,32 +131,28 @@ void Thread_Console_Shutdown(void)
     
     /* Free all commands and their allocations */
     if (console->Console_Commands) {
-        /* Free each command's strings and structures manually */
+        /* Free each command's strings first, then let Free_Queue handle the structures */
         TX_MUTEX *queue_mutex = Queue_Get_Mutex(console->Console_Commands);
         if (queue_mutex && tx_mutex_get(queue_mutex, TX_WAIT_FOREVER) == TX_SUCCESS) {
             for (int i = 0; i < console->Console_Commands->Size; i++) {
-                tConsole_Command *cmd = (tConsole_Command *)Queue_Peek(console->Console_Commands, i);
+                tConsole_Command *cmd = (tConsole_Command *)Queue_Peek_Unsafe(console->Console_Commands, i);
                 if (cmd) {
-                    if (cmd->Command_Name) Safe_Block_Release(cmd->Command_Name);
-                    if (cmd->Description) Safe_Block_Release(cmd->Description);
-                    Safe_Block_Release(cmd);
+                    if (cmd->Command_Name) Safe_Byte_Release(cmd->Command_Name);
+                    if (cmd->Description) Safe_Byte_Release(cmd->Description);
+                    /* Don't free cmd itself - Free_Queue will do that */
                 }
             }
             tx_mutex_put(queue_mutex);
         }
         
-        /* Empty the queue without calling Free_Queue (which would try to free with wrong allocator) */
-        while (Dequeue(console->Console_Commands) != NULL) {
-            /* Commands already freed above, just drain the queue */
-        }
-        tx_mutex_delete(Queue_Get_Mutex(console->Console_Commands));
-        Safe_Block_Release(console->Console_Commands);
+        /* Now Free_Queue can safely free the command structures */
+        Free_Queue(console->Console_Commands);
         console->Console_Commands = NULL;
     }
     
     if (console->Running_Repeat_Commands) {
         /* Running commands are references to commands in Console_Commands, 
-           so just drain and delete the queue structure */
+           so just drain and delete the queue structure - don't free the command data */
         while (Dequeue(console->Running_Repeat_Commands) != NULL) {
             /* Just drain - don't free the command pointers */
         }
@@ -162,16 +173,17 @@ tConsole_Command * Console_Add_Command(const char * command_Name, const char * D
     UINT status;
     
     /* Allocate command structure */
-    status = Safe_Block_Allocate(&tx_app_mid_block_pool, (VOID **)&new_Command, TX_NO_WAIT);
+    status = Safe_Byte_Allocate(&tx_app_byte_pool, (VOID **)&new_Command, sizeof(tConsole_Command), TX_NO_WAIT);
     if (status != TX_SUCCESS) {
         printd("ERROR: Command allocation failed\r\n");
         return NULL;
     }
     
     /* Allocate and copy command name */
-    status = Safe_Block_Allocate(&tx_app_mid_block_pool, (VOID **)&new_Command->Command_Name, TX_NO_WAIT);
+    size_t name_len = strlen(command_Name) + 1;
+    status = Safe_Byte_Allocate(&tx_app_byte_pool, (VOID **)&new_Command->Command_Name, name_len, TX_NO_WAIT);
     if (status != TX_SUCCESS) {
-        Safe_Block_Release(new_Command);
+        Safe_Byte_Release(new_Command);
         printd("ERROR: Command name allocation failed\r\n");
         return NULL;
     }
@@ -179,10 +191,11 @@ tConsole_Command * Console_Add_Command(const char * command_Name, const char * D
     
     /* Allocate and copy description if provided */
     if (Description != NULL) {
-        status = Safe_Block_Allocate(&tx_app_large_block_pool, (VOID **)&new_Command->Description, TX_NO_WAIT);
+        size_t desc_len = strlen(Description) + 1;
+        status = Safe_Byte_Allocate(&tx_app_byte_pool, (VOID **)&new_Command->Description, desc_len, TX_NO_WAIT);
         if (status != TX_SUCCESS) {
-            Safe_Block_Release(new_Command->Command_Name);
-            Safe_Block_Release(new_Command);
+            Safe_Byte_Release(new_Command->Command_Name);
+            Safe_Byte_Release(new_Command);
             printd("ERROR: Description allocation failed\r\n");
             return NULL;
         }
@@ -206,9 +219,9 @@ tConsole_Command * Console_Add_Command(const char * command_Name, const char * D
     
     /* Add to queue */
     if (!Enqueue(console->Console_Commands, new_Command)) {
-        if (new_Command->Description) Safe_Block_Release(new_Command->Description);
-        Safe_Block_Release(new_Command->Command_Name);
-        Safe_Block_Release(new_Command);
+        if (new_Command->Description) Safe_Byte_Release(new_Command->Description);
+        Safe_Byte_Release(new_Command->Command_Name);
+        Safe_Byte_Release(new_Command);
         printd("ERROR: Failed to add command to queue\r\n");
         return NULL;
     }
@@ -232,16 +245,17 @@ tConsole_Command * Thread_Console_Add_Debug_Command(const char *command_Name,
     UINT status;
     
     /* Allocate command structure */
-    status = Safe_Block_Allocate(&tx_app_mid_block_pool, (VOID **)&new_Command, TX_NO_WAIT);
+    status = Safe_Byte_Allocate(&tx_app_byte_pool, (VOID **)&new_Command, sizeof(tConsole_Command), TX_NO_WAIT);
     if (status != TX_SUCCESS) {
         printd("ERROR: Debug command allocation failed\r\n");
         return NULL;
     }
     
     /* Allocate and copy command name */
-    status = Safe_Block_Allocate(&tx_app_mid_block_pool, (VOID **)&new_Command->Command_Name, TX_NO_WAIT);
+    size_t name_len = strlen(command_Name) + 1;
+    status = Safe_Byte_Allocate(&tx_app_byte_pool, (VOID **)&new_Command->Command_Name, name_len, TX_NO_WAIT);
     if (status != TX_SUCCESS) {
-        Safe_Block_Release(new_Command);
+        Safe_Byte_Release(new_Command);
         printd("ERROR: Debug command name allocation failed\r\n");
         return NULL;
     }
@@ -249,10 +263,11 @@ tConsole_Command * Thread_Console_Add_Debug_Command(const char *command_Name,
     
     /* Allocate and copy description if provided */
     if (Description) {
-        status = Safe_Block_Allocate(&tx_app_large_block_pool, (VOID **)&new_Command->Description, TX_NO_WAIT);
+        size_t desc_len = strlen(Description) + 1;
+        status = Safe_Byte_Allocate(&tx_app_byte_pool, (VOID **)&new_Command->Description, desc_len, TX_NO_WAIT);
         if (status != TX_SUCCESS) {
-            Safe_Block_Release(new_Command->Command_Name);
-            Safe_Block_Release(new_Command);
+            Safe_Byte_Release(new_Command->Command_Name);
+            Safe_Byte_Release(new_Command);
             printd("ERROR: Debug description allocation failed\r\n");
             return NULL;
         }
@@ -276,9 +291,9 @@ tConsole_Command * Thread_Console_Add_Debug_Command(const char *command_Name,
     
     /* Add to queue */
     if (!Enqueue(console->Console_Commands, new_Command)) {
-        if (new_Command->Description) Safe_Block_Release(new_Command->Description);
-        Safe_Block_Release(new_Command->Command_Name);
-        Safe_Block_Release(new_Command);
+        if (new_Command->Description) Safe_Byte_Release(new_Command->Description);
+        Safe_Byte_Release(new_Command->Command_Name);
+        Safe_Byte_Release(new_Command);
         printd("ERROR: Failed to add debug command to queue\r\n");
         return NULL;
     }
@@ -293,7 +308,9 @@ void printd(const char* format, ...)
     
     if (percent_sign == NULL) {
         /* Simple string, send directly */
-        UART_Add_Transmit(console->UART_Handler, (uint8_t *)format, strlen(format));
+        size_t len = strlen(format);
+        if (len > UINT8_MAX) len = UINT8_MAX; /* Truncate to uint8_t max */
+        UART_Add_Transmit(console->UART_Handler, (uint8_t *)format, (uint8_t)len);
     } else {
         /* Formatted string, use block pool instead of malloc */
         char* buffer = NULL;
@@ -322,7 +339,9 @@ void printd(const char* format, ...)
         vsnprintf(buffer, needed_size, format, args);
         va_end(args);
         
-        UART_Add_Transmit(console->UART_Handler, (uint8_t*)buffer, strlen(buffer));
+        size_t len = strlen(buffer);
+        if (len > UINT8_MAX) len = UINT8_MAX; /* Truncate to uint8_t max */
+        UART_Add_Transmit(console->UART_Handler, (uint8_t*)buffer, (uint8_t)len);
         Safe_Block_Release(buffer);
     }
 }
@@ -349,21 +368,20 @@ VOID RX_Thread_Entry(ULONG thread_input)
         if (data_size > 0) {
             /* Process received data */
             for (uint16_t counter = 0; counter < data_size; counter++) {
-                /* Get current state safely */
+                /* Handle different console states - acquire mutex for each state check/action */
                 status = tx_mutex_get(&console_mutex, CONSOLE_MUTEX_WAIT);
                 if (status != TX_SUCCESS) {
                     printd("ERROR: Failed to acquire console mutex in RX\r\n");
                     break;
                 }
-                tx_mutex_put(&console_mutex);
                 
-                /* Handle different console states */
                 if (console->Console_State == eConsole_Halting_Commands) {
+                    tx_mutex_put(&console_mutex);
                     /* Stop all running commands - guard iteration with queue mutex */
                     TX_MUTEX *queue_mutex = Queue_Get_Mutex(console->Running_Repeat_Commands);
                     if (queue_mutex && tx_mutex_get(queue_mutex, TX_WAIT_FOREVER) == TX_SUCCESS) {
                         for (int i = 0; i < console->Running_Repeat_Commands->Size; i++) {
-                            tConsole_Command * curr_Command = (tConsole_Command*)Queue_Peek(console->Running_Repeat_Commands, i);
+                            tConsole_Command * curr_Command = (tConsole_Command*)Queue_Peek_Unsafe(console->Running_Repeat_Commands, i);
                             if (curr_Command && curr_Command->Stop_Function) {
                                 curr_Command->Stop_Function(curr_Command->Stop_Params);
                             }
@@ -380,20 +398,17 @@ VOID RX_Thread_Entry(ULONG thread_input)
                 /* Handle resume command when halted */
                 else if (console->Console_State == eConsole_Halted_Commands) {
                     if (counter >= 2 && data[counter - 2] == '!' && data[counter - 1] == 'r' && data[counter] == '\r') {
-                        /* Set state directly to avoid deadlock */
-                        status = tx_mutex_get(&console_mutex, CONSOLE_MUTEX_WAIT);
-                        if (status == TX_SUCCESS) {
-                            console->Console_State = eConsole_Resume_Commands;
-                            tx_mutex_put(&console_mutex);
-                        }
+                        console->Console_State = eConsole_Resume_Commands;
                     }
+                    tx_mutex_put(&console_mutex);
                 }
                 else if (console->Console_State == eConsole_Resume_Commands){
+                    tx_mutex_put(&console_mutex);
                     /* Resume all running commands - guard iteration with queue mutex */
                     TX_MUTEX *queue_mutex = Queue_Get_Mutex(console->Running_Repeat_Commands);
                     if (queue_mutex && tx_mutex_get(queue_mutex, TX_WAIT_FOREVER) == TX_SUCCESS) {
                         for (int i = 0; i < console->Running_Repeat_Commands->Size; i++){
-                            tConsole_Command * curr_Command = (tConsole_Command*)Queue_Peek(console->Running_Repeat_Commands, i);
+                            tConsole_Command * curr_Command = (tConsole_Command*)Queue_Peek_Unsafe(console->Running_Repeat_Commands, i);
                             if (curr_Command && curr_Command->Resume_Function) {
                                 curr_Command->Resume_Function(curr_Command->Resume_Params);
                             }
@@ -410,21 +425,13 @@ VOID RX_Thread_Entry(ULONG thread_input)
                 else if (console->Console_State == eConsole_Servicing_Command) {
                     if (data[counter] == '\r') {
                         printd("Console paused.\r\n");
-                        /* Set state directly to avoid deadlock */
-                        status = tx_mutex_get(&console_mutex, CONSOLE_MUTEX_WAIT);
-                        if (status == TX_SUCCESS) {
-                            console->Console_State = eConsole_Halting_Commands;
-                            tx_mutex_put(&console_mutex);
-                        }
+                        console->Console_State = eConsole_Halting_Commands;
                     }
+                    tx_mutex_put(&console_mutex);
                 }
                 /* Handle normal command input */
                 else if (console->Console_State == eConsole_Wait_For_Commands || console->Console_State == eConsole_Halted_Commands) {
-                    /* Protect buffer operations */
-                    status = tx_mutex_get(&console_mutex, CONSOLE_MUTEX_WAIT);
-                    if (status != TX_SUCCESS) {
-                        break;
-                    }
+                    /* Buffer operations already protected by mutex held above */
                     
                     /* Check buffer overflow */
                     if (console->RX_Buff_Idx >= MAX_CONSOLE_BUFF_SIZE - 1) {
@@ -471,7 +478,7 @@ VOID RX_Thread_Entry(ULONG thread_input)
                         } else {
                             /* Copy command buffer for processing */
                             uint8_t command_buffer[MAX_CONSOLE_BUFF_SIZE];
-                            uint16_t command_length = console->RX_Buff_Idx;
+                            uint8_t command_length = (uint8_t)console->RX_Buff_Idx;
                             strcpy((char*)command_buffer, (char*)console->RX_Buff);
                             
                             /* Release mutex before calling Process_Commands */
@@ -493,11 +500,12 @@ VOID RX_Thread_Entry(ULONG thread_input)
                 }
                 /* Handle quit state */
                 else if (console->Console_State == eConsole_Quit_Commands) {
+                    tx_mutex_put(&console_mutex);
                     /* Stop all running commands - guard iteration with queue mutex */
                     TX_MUTEX *queue_mutex = Queue_Get_Mutex(console->Running_Repeat_Commands);
                     if (queue_mutex && tx_mutex_get(queue_mutex, TX_WAIT_FOREVER) == TX_SUCCESS) {
                         for (int i = 0; i < console->Running_Repeat_Commands->Size; i++) {
-                            tConsole_Command * curr_command = Queue_Peek(console->Running_Repeat_Commands, i);
+                            tConsole_Command * curr_command = Queue_Peek_Unsafe(console->Running_Repeat_Commands, i);
                             if (curr_command && curr_command->Stop_Function) {
                                 curr_command->Stop_Function(curr_command->Stop_Params);
                             }
@@ -510,6 +518,10 @@ VOID RX_Thread_Entry(ULONG thread_input)
                         console->Console_State = eConsole_Wait_For_Commands;
                         tx_mutex_put(&console_mutex);
                     }
+                }
+                else {
+                    /* Unknown state - just release mutex */
+                    tx_mutex_put(&console_mutex);
                 }
             }
             
@@ -533,7 +545,7 @@ VOID Debug_Thread_Entry(ULONG thread_input)
         TX_MUTEX *queue_mutex = Queue_Get_Mutex(console->Running_Repeat_Commands);
         if (queue_mutex && tx_mutex_get(queue_mutex, TX_WAIT_FOREVER) == TX_SUCCESS) {
             for (int i = 0; i < console->Running_Repeat_Commands->Size; i++) {
-                tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek(console->Running_Repeat_Commands, i);
+                tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek_Unsafe(console->Running_Repeat_Commands, i);
                 if (!curr_Command || !curr_Command->Call_Function) continue;
 
                 /* If Repeat_Time is zero, run every cycle. Otherwise check elapsed time. */
@@ -585,7 +597,7 @@ VOID Complete_Thread_Entry(ULONG thread_input)
     }
 }
 
-static void Process_Commands(uint8_t * data_ptr, uint16_t command_size)
+static void Process_Commands(uint8_t * data_ptr, uint8_t command_size)
 {
     char command[MAX_CONSOLE_BUFF_SIZE];
     (void)command_size; /* Unused parameter - using fixed buffer instead */
@@ -613,7 +625,7 @@ static void Process_Commands(uint8_t * data_ptr, uint16_t command_size)
         TX_MUTEX *queue_mutex = Queue_Get_Mutex(console->Console_Commands);
         if (queue_mutex && tx_mutex_get(queue_mutex, TX_WAIT_FOREVER) == TX_SUCCESS) {
             for (int i = 0; i < console->Console_Commands->Size; i++) {
-                tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek(console->Console_Commands, i);
+                tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek_Unsafe(console->Console_Commands, i);
                 if (curr_Command) {
                     printd("%s: %s\r\n", curr_Command->Command_Name, 
                                 curr_Command->Description ? curr_Command->Description : "No description");
@@ -637,7 +649,7 @@ static void Process_Commands(uint8_t * data_ptr, uint16_t command_size)
         TX_MUTEX *queue_mutex = Queue_Get_Mutex(console->Console_Commands);
         if (queue_mutex && tx_mutex_get(queue_mutex, TX_WAIT_FOREVER) == TX_SUCCESS) {
             for (int i = 0; i < console->Console_Commands->Size; i++) {
-                tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek(console->Console_Commands, i);
+                tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek_Unsafe(console->Console_Commands, i);
                 if (curr_Command && strcmp(prompt_command, curr_Command->Command_Name) == 0) {
                     if (halt_flag && curr_Command->Halt_Function) {
                         curr_Command->Halt_Function(curr_Command->Halt_Params);
@@ -666,7 +678,7 @@ static void Process_Commands(uint8_t * data_ptr, uint16_t command_size)
         TX_MUTEX *queue_mutex = Queue_Get_Mutex(console->Console_Commands);
         if (queue_mutex && tx_mutex_get(queue_mutex, TX_WAIT_FOREVER) == TX_SUCCESS) {
             for (int i = 0; i < console->Console_Commands->Size; i++) {
-                tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek(console->Console_Commands, i);
+                tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek_Unsafe(console->Console_Commands, i);
                 if (curr_Command && strcmp(prompt_command, curr_Command->Command_Name) == 0) {
                     if (curr_Command->Resume_Function) {
                         curr_Command->Resume_Function(curr_Command->Resume_Params);
@@ -683,14 +695,14 @@ static void Process_Commands(uint8_t * data_ptr, uint16_t command_size)
         TX_MUTEX *commands_mutex = Queue_Get_Mutex(console->Console_Commands);
         if (commands_mutex && tx_mutex_get(commands_mutex, TX_WAIT_FOREVER) == TX_SUCCESS) {
             for (int i = 0; i < console->Console_Commands->Size; i++) {
-                tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek(console->Console_Commands, i);
+                tConsole_Command * curr_Command = (tConsole_Command *)Queue_Peek_Unsafe(console->Console_Commands, i);
                 if (curr_Command && strcmp(command, curr_Command->Command_Name) == 0) {
                     /* Check if command is already running - need separate mutex for running commands */
                     bool command_already_running = false;
                     TX_MUTEX *running_mutex = Queue_Get_Mutex(console->Running_Repeat_Commands);
                     if (running_mutex && tx_mutex_get(running_mutex, TX_WAIT_FOREVER) == TX_SUCCESS) {
                         for (int c = 0; c < console->Running_Repeat_Commands->Size; c++) {
-                            tConsole_Command * curr_Running_Command = (tConsole_Command *)Queue_Peek(console->Running_Repeat_Commands, c);
+                            tConsole_Command * curr_Running_Command = (tConsole_Command *)Queue_Peek_Unsafe(console->Running_Repeat_Commands, c);
                             if (curr_Running_Command && strcmp(command, curr_Running_Command->Command_Name) == 0) {
                                 printd("Command Already Running\r\n");
                                 command_already_running = true;

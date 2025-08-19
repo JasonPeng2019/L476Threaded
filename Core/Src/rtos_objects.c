@@ -18,7 +18,7 @@ UCHAR tx_app_thread_stack[TX_APP_THREAD_STACK_SIZE];
 // Define queue storage
 ULONG tx_app_queue_storage[10];
 
-static UINT Safe_Block_Allocate(TX_BLOCK_POOL *pool, VOID **block_ptr, ULONG wait_option)
+UINT Safe_Block_Allocate(TX_BLOCK_POOL *pool, VOID **block_ptr, ULONG wait_option)
 {
     if (!pool || !block_ptr) {
         return TX_PTR_ERROR;
@@ -26,7 +26,7 @@ static UINT Safe_Block_Allocate(TX_BLOCK_POOL *pool, VOID **block_ptr, ULONG wai
     return tx_block_allocate(pool, block_ptr, wait_option);
 }
 
-static UINT Safe_Block_Release(VOID *block_ptr)
+UINT Safe_Block_Release(VOID *block_ptr)
 {
     if (!block_ptr) {
         return TX_PTR_ERROR;
