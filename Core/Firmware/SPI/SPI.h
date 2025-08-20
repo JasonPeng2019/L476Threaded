@@ -1,118 +1,77 @@
 /*
  * SPI.h
  *
- *  Created on: Aug 15, 2025
- *      Author: jason.peng (Mirrored from I2C driver)
+ *  Created on: Apr , 2020
+ *      Author: jason.peng
  */
 
 #ifndef SPI_SPI_H_
 #define SPI_SPI_H_
 
 #include "main.h"
-#include "../../Middlewares/Queue/Queue.h"
+#include "GPIO/GPIO.h"
+#include "Queue/Queue.h"
+#include <stdint.h>
 #include <stdbool.h>
 
-typedef enum {
-    eSPI_Write,
-    eSPI_Read,
-    eSPI_WriteRead,         // Full duplex operation
-    eSPI_ChipSelect_Write,  // Write with manual CS control
-    eSPI_ChipSelect_Read,   // Read with manual CS control
-    eSPI_ChipSelect_WriteRead, // Full duplex with manual CS control
-} eSPI_Op_Type;
 
-typedef enum {
-    eSPI_Mode_Single,
-    eSPI_Mode_Continuous
-} eSPI_Mode;
+#define MAX_SPI_WAIT_TIME		100
 
-// SPI Packet structure - handles duplex nature of SPI
-typedef struct {
-    eSPI_Op_Type Op_type;
-    uint8_t * TX_Data;      // Data to transmit (can be NULL for read-only)
-    uint8_t * RX_Data;      // Buffer for received data (can be NULL for write-only)
-    uint16_t Data_Size;     // Size of data transfer
-    GPIO_TypeDef * CS_Port; // Chip Select GPIO port (NULL for auto CS)
-    uint16_t CS_Pin;        // Chip Select GPIO pin
-    bool CS_Active_Low;     // CS polarity (true = active low, false = active high)
-    void(*Complete_CallBack)(void *);
-    void * CallBack_Data;
-    uint8_t Tries_timeout;
-    bool * Success;
-} tSPI_Packet;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-// SPI Continuous Channel structure
-typedef struct {
-    uint8_t * TX_Buffer;    // Continuous transmit buffer
-    uint8_t * RX_Buffer;    // Continuous receive buffer
-    uint16_t Buffer_Size;
-    bool * Success;
-    bool Buffer_Ready;      // Flag indicating buffer is ready for processing
-    void(*Complete_CallBack)(void *);
-    void * CallBack_Data;
-    uint8_t Tries_timeout;
-    uint32_t Transfer_Idx;  // Current transfer index
-    GPIO_TypeDef * CS_Port; // Chip Select for continuous mode
-    uint16_t CS_Pin;
-    bool CS_Active_Low;
-} tSPI_Continuous_Channel;
+typedef enum
+{
+	eSPI_Failed = -1,
+	eSPI_Busy = -2,
+	eSPI_Timeout = -3
+}SPI_Error;
 
-typedef struct {
-    eSPI_Mode Mode;
-    SPI_HandleTypeDef * SPI_Handle;
-    volatile bool Busy_Flag;
-    Queue* Packet_Queue;
-    uint32_t Task_ID;
-    tSPI_Continuous_Channel * Continuous_Channel;
-    tSPI_Packet * Current_Packet;
-    
-    // SPI-specific configuration
-    uint32_t Baudrate_Prescaler;    // SPI clock prescaler
-    uint32_t Clock_Polarity;        // CPOL setting
-    uint32_t Clock_Phase;           // CPHA setting
-    uint32_t Data_Size_Config;      // 8-bit, 16-bit, etc.
-    uint32_t First_Bit;             // MSB or LSB first
-} tSPI;
+typedef enum
+{
+	eWrite_DMA = 0,
+	eRead_DMA,
+	eAddressed_Write_DMA,
+	eAddressed_Read_DMA
+}SPI_Task_Types;
 
-// Initialization and configuration functions
-tSPI * Init_SPI(SPI_HandleTypeDef * SPI_Handle);
-void Reset_SPI(tSPI * SPI);
-bool Configure_SPI_Timing(tSPI * SPI, uint32_t Baudrate_Prescaler, uint32_t Clock_Polarity, uint32_t Clock_Phase);
+typedef struct
+{
+	SPI_Task_Types Type;
+	GPIO * nSS;
+	uint8_t * Transmit_Data;
+	uint32_t Transmit_Data_Size;
+	void (*Pre_Function)(void *);
+	void (*Post_Function)(void *);
+	void * Function_Data;
+}SPI_Task;
 
-// Mode switching functions
-bool Change_Single_Mode(tSPI * SPI);
-bool Change_Continuous_Mode(tSPI * SPI, tSPI_Continuous_Channel * Channel);
+typedef struct
+{
+	SPI_HandleTypeDef * SPI_Handle;
 
-// Blocking SPI operations
-bool SPI_Blocking_Write(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint32_t Timeout);
-bool SPI_Blocking_Read(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint32_t Timeout);
-bool SPI_Blocking_WriteRead(tSPI * SPI, uint8_t * TX_Data, uint8_t * RX_Data, uint16_t Data_Size, uint32_t Timeout);
+	Queue Task_Queue;
+	volatile bool SPI_Busy;
+	SPI_Task * Current_Task;
 
-// Blocking SPI operations with manual Chip Select
-bool SPI_Blocking_CS_Write(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint32_t Timeout);
-bool SPI_Blocking_CS_Read(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint32_t Timeout);
-bool SPI_Blocking_CS_WriteRead(tSPI * SPI, uint8_t * TX_Data, uint8_t * RX_Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint32_t Timeout);
+	uint32_t Task_ID;
+}SPI;
 
-// Non-blocking SPI operations
-bool SPI_Write(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success);
-bool SPI_Read(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success);
-bool SPI_WriteRead(tSPI * SPI, uint8_t * TX_Data, uint8_t * RX_Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success);
+SPI * Init_SPI(SPI_HandleTypeDef * SPI_Handle);
 
-// Non-blocking SPI operations with callbacks
-bool SPI_Callback_Write(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success, void (*Complete_CallBack)(void *), void * CallBack_Data);
-bool SPI_Callback_Read(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success, void (*Complete_CallBack)(void *), void * CallBack_Data);
-bool SPI_Callback_WriteRead(tSPI * SPI, uint8_t * TX_Data, uint8_t * RX_Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success, void (*Complete_CallBack)(void *), void * CallBack_Data);
+/* BLOCKING FUNCTION CALLS */
+int32_t SPI_Write(SPI * SPI_Handle, GPIO * nSS, uint8_t * Transmit_Data, uint32_t Transmit_Data_Size);
+int32_t SPI_Read(SPI * SPI_Handle, GPIO * nSS, uint8_t * Return_Data, uint16_t Return_Data_Size);
+int32_t SPI_Addressed_Write(SPI * SPI_Handle, GPIO * nSS, uint8_t * Address_Data, uint16_t Address_Data_Size, uint8_t * Transmit_Data, uint16_t Transmit_Data_Size);
+int32_t SPI_Addressed_Read(SPI * SPI_Handle, GPIO * nSS, uint8_t * Transmit_Data, uint16_t Transmit_Data_Size, uint8_t * Return_Data, uint16_t Return_Data_Size);
 
-// Non-blocking SPI operations with manual Chip Select
-bool SPI_CS_Write(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint8_t Tries_timeout, bool * Success);
-bool SPI_CS_Read(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint8_t Tries_timeout, bool * Success);
-bool SPI_CS_WriteRead(tSPI * SPI, uint8_t * TX_Data, uint8_t * RX_Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint8_t Tries_timeout, bool * Success);
+/* DMA FUNCTION CALLS */
+int32_t SPI_Write_DMA(SPI * SPI_Handle, GPIO * nSS, uint8_t * Transmit_Data, uint16_t Transmit_Data_Size, void * Pre_Function_PTR, void * Post_Function_PTR, void * Function_Data);
 
-// Task management
-void SPI_Task(tSPI * SPI);
 
-// Utility functions
-void SPI_CS_Assert(GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low);
-void SPI_CS_Deassert(GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low);
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SPI_SPI_H_ */

@@ -395,13 +395,6 @@ VOID RX_Thread_Entry(ULONG thread_input)
                         tx_mutex_put(&console_mutex);
                     }
                 }
-                /* Handle resume command when halted */
-                else if (console->Console_State == eConsole_Halted_Commands) {
-                    if (counter >= 2 && data[counter - 2] == '!' && data[counter - 1] == 'r' && data[counter] == '\r') {
-                        console->Console_State = eConsole_Resume_Commands;
-                    }
-                    tx_mutex_put(&console_mutex);
-                }
                 else if (console->Console_State == eConsole_Resume_Commands){
                     tx_mutex_put(&console_mutex);
                     /* Resume all running commands - guard iteration with queue mutex */
@@ -535,6 +528,10 @@ VOID RX_Thread_Entry(ULONG thread_input)
     }
 }
 
+/**
+ *  CANNOT use debug thread to add commands - will create ABBA deadlock 
+ */
+
 VOID Debug_Thread_Entry(ULONG thread_input)
 {
     (void)thread_input;
@@ -638,6 +635,11 @@ static void Process_Commands(uint8_t * data_ptr, uint8_t command_size)
     else if (strcmp(command, "quit") == 0) {
         printd("Quitting commands.\r\n");
         Console_Quit_Commands();
+    }
+    /* Handle !r resume command */
+    else if (strcmp(command, "!r") == 0) {
+        printd("Resuming commands.\r\n");
+        Console_Resume_Commands();
     }
     /* Handle prefixed commands (halt/stop/help <command>) */
     else if (flag_3 && strlen(command) > 5) {

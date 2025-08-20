@@ -1,551 +1,223 @@
-/***
- * author: Jason.p
- * date: 8/15/25
- * SPI Driver - Mirrored from I2C driver with SPI-specific adaptations
+/*
+ * SPI.c
+ *
+ *  Created on: Apr 3, 2020
+ *      Author: devink
  */
 
 #include "SPI.h"
+#include "Scheduler/Scheduler.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 
-tSPI * Init_SPI(SPI_HandleTypeDef * SPI_Handle){
-    tSPI * SPI = (tSPI *)malloc(sizeof(tSPI));
-    if (SPI == NULL){
-        return NULL; 
-    }
-    SPI->SPI_Handle = SPI_Handle; 
-    SPI->Packet_Queue = Prep_Queue();
-    if (SPI->Packet_Queue == NULL){
-        free(SPI);
-        return NULL;
-    }
-    SPI->Busy_Flag = false;
-    SPI->Mode = eSPI_Mode_Single;
-    SPI->Task_ID = Start_Task(SPI_Task, SPI, 0);
-    Set_Task_Name(SPI->Task_ID, "SPI Task");
-    SPI->Continuous_Channel = NULL;
-    SPI->Current_Packet = NULL;
-    
-    // Initialize SPI-specific configuration with sensible defaults
-    SPI->Baudrate_Prescaler = SPI_BAUDRATEPRESCALER_16;
-    SPI->Clock_Polarity = SPI_POLARITY_LOW;
-    SPI->Clock_Phase = SPI_PHASE_1EDGE;
-    SPI->Data_Size_Config = SPI_DATASIZE_8BIT;
-    SPI->First_Bit = SPI_FIRSTBIT_MSB;
-    
-    return SPI;
+static bool SPI_Callbacks_Initialized = false;
+static Queue SPI_Callback_Handles;
+static void SPI_Tasks(void * Task_Data);
+
+SPI * Init_SPI(SPI_HandleTypeDef * SPI_Handle)
+{
+	if(!SPI_Callbacks_Initialized)
+	{
+		Prep_Queue(&SPI_Callback_Handles);
+		SPI_Callbacks_Initialized = true;
+	}
+
+	SPI * spi = (SPI *)malloc(sizeof(SPI));
+	if(spi)
+	{
+		spi->SPI_Handle = SPI_Handle;
+		spi->SPI_Busy = false;
+		spi->Current_Task = NULL;
+
+		Prep_Queue(&spi->Task_Queue);
+
+		spi->Task_ID = Start_Task(SPI_Tasks, (void *)spi, 0);
+		Set_Task_Name(spi->Task_ID, "SPI Task");
+		Task_Add_Heap_Size(spi->Task_ID, (void *) spi);
+
+		// Add the spi to the callback queue so we can handle HAl callbacks
+		Enqueue(&SPI_Callback_Handles, (void *)spi);
+	}
+	else
+	{
+		printf("SPI malloc error\r\n");
+	}
+
+	return spi;
 }
 
-void Reset_SPI(tSPI * SPI){
-    if (SPI == NULL) return;
-    
-    Change_Single_Mode(SPI);  
+static void SPI_Tasks(void * Task_Data)
+{
+	SPI * spi = (SPI *)Task_Data;
 
-    if (HAL_SPI_DeInit(SPI->SPI_Handle) != HAL_OK){
-        return;
-    }
-    if (HAL_SPI_Init(SPI->SPI_Handle) != HAL_OK){
-        return;
-    }
+	// If the spi is not busy and there is something to do then process the next task
+	if(!spi->SPI_Busy && spi->Task_Queue.Size > 0)
+	{
+		// Set the flag that we are busy
+		spi->SPI_Busy = true;
 
-    SPI->Busy_Flag = false;
+		// Test if we need to clean up previous data
+		if(spi->Current_Task != NULL)
+		{
+			Task_free(spi->Task_ID, spi->Current_Task->Transmit_Data);
+			Task_free(spi->Task_ID, spi->Current_Task);
+		}
 
-    // Handle the packet queue
-    while (SPI->Packet_Queue->Size > 0){
-        tSPI_Packet * Curr_Packet = (tSPI_Packet *)Dequeue(SPI->Packet_Queue);
-        if (Curr_Packet) {
-            free(Curr_Packet);
-        }
-    }
-    free(SPI->Packet_Queue);
-    SPI->Packet_Queue = NULL;
-    SPI->Packet_Queue = Prep_Queue();
-    if (SPI->Packet_Queue == NULL){
-        return;
-    }    
+		// Get the next task to process
+		spi->Current_Task = (SPI_Task *)Dequeue(&spi->Task_Queue);
 
-    if (SPI->Task_ID != NULL){
-        Halt_Task(SPI->Task_ID);
-        Delete_Task(SPI->Task_ID);
-    }
-    SPI->Task_ID = NULL;
-    SPI->Task_ID = Start_Task(SPI_Task, SPI, 0);
-    Set_Task_Name(SPI->Task_ID, "SPI Task");
+		// Call the pre function if there is one defined
+		if(spi->Current_Task->Pre_Function != NULL)
+		{
+			spi->Current_Task->Pre_Function(spi->Current_Task->Function_Data);
+		}
+
+		// Set the chip select low
+		Set_GPIO_State_Low(spi->Current_Task->nSS);
+
+		// Start the transmission
+		HAL_SPI_Transmit_DMA(spi->SPI_Handle, spi->Current_Task->Transmit_Data, spi->Current_Task->Transmit_Data_Size);
+	}
 }
 
-bool Configure_SPI_Timing(tSPI * SPI, uint32_t Baudrate_Prescaler, uint32_t Clock_Polarity, uint32_t Clock_Phase){
-    if (SPI == NULL || SPI->SPI_Handle == NULL) return false;
-    
-    SPI->Baudrate_Prescaler = Baudrate_Prescaler;
-    SPI->Clock_Polarity = Clock_Polarity;
-    SPI->Clock_Phase = Clock_Phase;
-    
-    // Update HAL configuration
-    SPI->SPI_Handle->Init.BaudRatePrescaler = Baudrate_Prescaler;
-    SPI->SPI_Handle->Init.CLKPolarity = Clock_Polarity;
-    SPI->SPI_Handle->Init.CLKPhase = Clock_Phase;
-    
-    return (HAL_SPI_Init(SPI->SPI_Handle) == HAL_OK);
+int32_t SPI_Write(SPI * SPI_Handle, GPIO * nSS, uint8_t * Transmit_Data, uint32_t Transmit_Data_Size)
+{
+	uint32_t Data_Transmitted = 0;
+	HAL_StatusTypeDef ret;
+	Set_GPIO_State_Low(nSS);
+	while(Data_Transmitted < Transmit_Data_Size)
+	{
+		uint16_t size = 0;
+		if((Transmit_Data_Size - Data_Transmitted) > 0xFFFF)
+			size = 0xFFFF;
+		else
+			size = Transmit_Data_Size - Data_Transmitted;
+
+		ret = HAL_SPI_Transmit(SPI_Handle->SPI_Handle, &Transmit_Data[Data_Transmitted], size, MAX_SPI_WAIT_TIME);
+		Data_Transmitted += size;
+	}
+	Set_GPIO_State_High(nSS);
+
+	if(ret == HAL_OK)
+		return Transmit_Data_Size;
+	else if(ret == HAL_ERROR)
+		return eSPI_Failed;
+	else if(ret == HAL_BUSY)
+		return eSPI_Busy;
+	else if(ret == HAL_TIMEOUT)
+		return eSPI_Timeout;
+	else
+		return 0;
 }
 
-bool Change_Single_Mode(tSPI * SPI){
-    if (SPI == NULL) return false;
-    
-    if (SPI->Mode == eSPI_Mode_Single){
-        return true;
-    }
-    else {
-        SPI->Mode = eSPI_Mode_Single;
-        SPI->Busy_Flag = false;
-        
-        // Abort any ongoing DMA operations
-        if (SPI->SPI_Handle->hdmatx) {
-            HAL_DMA_Abort(SPI->SPI_Handle->hdmatx);
-            HAL_DMA_DeInit(SPI->SPI_Handle->hdmatx);
-            HAL_DMA_Init(SPI->SPI_Handle->hdmatx);
-        }
-        if (SPI->SPI_Handle->hdmarx) {
-            HAL_DMA_Abort(SPI->SPI_Handle->hdmarx);
-            HAL_DMA_DeInit(SPI->SPI_Handle->hdmarx);
-            HAL_DMA_Init(SPI->SPI_Handle->hdmarx);
-        }
-        
-        // Clear continuous channel data if it exists
-        if (SPI->Continuous_Channel && SPI->Continuous_Channel->RX_Buffer) {
-            memset(SPI->Continuous_Channel->RX_Buffer, 0, SPI->Continuous_Channel->Buffer_Size);
-        }
-        return true;
-    }
+int32_t SPI_Read(SPI * SPI_Handle, GPIO * nSS, uint8_t * Return_Data, uint16_t Return_Data_Size)
+{
+	Set_GPIO_State_Low(nSS);
+	HAL_StatusTypeDef ret = HAL_SPI_Receive(SPI_Handle->SPI_Handle, Return_Data, Return_Data_Size, MAX_SPI_WAIT_TIME);
+	Set_GPIO_State_High(nSS);
+
+	if(ret == HAL_OK)
+		return Return_Data_Size;
+	else if(ret == HAL_ERROR)
+		return eSPI_Failed;
+	else if(ret == HAL_BUSY)
+		return eSPI_Busy;
+	else if(ret == HAL_TIMEOUT)
+		return eSPI_Timeout;
+	else
+		return 0;
 }
 
-bool Change_Continuous_Mode(tSPI * SPI, tSPI_Continuous_Channel * Channel){
-    if (SPI == NULL || Channel == NULL) return false;
-    
-    if (SPI->Mode == eSPI_Mode_Continuous){
-        return true;
-    }
-    else{
-        Reset_SPI(SPI);
-        SPI->Mode = eSPI_Mode_Continuous;
-        SPI->Continuous_Channel = Channel;
-        SPI->Busy_Flag = false;
-        Channel->Transfer_Idx = 0;
-        return true;
-    }
+int32_t SPI_Addressed_Write(SPI * SPI_Handle, GPIO * nSS, uint8_t * Address_Data, uint16_t Address_Data_Size, uint8_t * Transmit_Data, uint16_t Transmit_Data_Size)
+{
+	Set_GPIO_State_Low(nSS);
+	HAL_StatusTypeDef ret = HAL_SPI_Transmit(SPI_Handle->SPI_Handle, Address_Data, Address_Data_Size, MAX_SPI_WAIT_TIME);
+	if(ret == HAL_OK)
+		ret = HAL_SPI_Transmit(SPI_Handle->SPI_Handle, Transmit_Data, Transmit_Data_Size, MAX_SPI_WAIT_TIME);
+	Set_GPIO_State_High(nSS);
+	
+	if(ret == HAL_OK)
+		return Transmit_Data_Size;
+	else if(ret == HAL_ERROR)
+		return eSPI_Failed;
+	else if(ret == HAL_BUSY)
+		return eSPI_Busy;
+	else if(ret == HAL_TIMEOUT)
+		return eSPI_Timeout;
+	else
+		return 0;
 }
 
-// Utility functions for Chip Select control
-void SPI_CS_Assert(GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low){
-    if (CS_Port == NULL) return;
-    
-    if (CS_Active_Low) {
-        HAL_GPIO_WritePin(CS_Port, CS_Pin, GPIO_PIN_RESET);
-    } else {
-        HAL_GPIO_WritePin(CS_Port, CS_Pin, GPIO_PIN_SET);
-    }
+int32_t SPI_Addressed_Read(SPI * SPI_Handle, GPIO * nSS, uint8_t * Transmit_Data, uint16_t Transmit_Data_Size, uint8_t * Return_Data, uint16_t Return_Data_Size)
+{
+	Set_GPIO_State_Low(nSS);
+	HAL_StatusTypeDef ret = HAL_SPI_Transmit(SPI_Handle->SPI_Handle, Transmit_Data, Transmit_Data_Size, MAX_SPI_WAIT_TIME);
+	if(ret == HAL_OK)
+		ret = HAL_SPI_Receive(SPI_Handle->SPI_Handle, Return_Data, Return_Data_Size, MAX_SPI_WAIT_TIME);
+	Set_GPIO_State_High(nSS);
+
+	if(ret == HAL_OK)
+		return Return_Data_Size;
+	else if(ret == HAL_ERROR)
+		return eSPI_Failed;
+	else if(ret == HAL_BUSY)
+		return eSPI_Busy;
+	else if(ret == HAL_TIMEOUT)
+		return eSPI_Timeout;
+	else
+		return 0;
 }
 
-void SPI_CS_Deassert(GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low){
-    if (CS_Port == NULL) return;
-    
-    if (CS_Active_Low) {
-        HAL_GPIO_WritePin(CS_Port, CS_Pin, GPIO_PIN_SET);
-    } else {
-        HAL_GPIO_WritePin(CS_Port, CS_Pin, GPIO_PIN_RESET);
-    }
+
+int32_t SPI_Write_DMA(SPI * SPI_Handle, GPIO * nSS, uint8_t * Transmit_Data, uint16_t Transmit_Data_Size, void * Pre_Function_PTR, void * Post_Function_PTR, void * Function_Data)
+{
+	// Save all the data and queue to be processed when the bus is free
+	SPI_Task * task = (SPI_Task *)Task_malloc(SPI_Handle->Task_ID, sizeof(SPI_Task));
+	if(task != NULL)
+	{
+		task->Transmit_Data = (uint8_t *)Task_malloc(SPI_Handle->Task_ID, Transmit_Data_Size * sizeof(uint8_t));
+		if(task->Transmit_Data != NULL)
+		{
+			task->Function_Data = Function_Data;
+			task->Post_Function = Post_Function_PTR;
+			task->Pre_Function = Pre_Function_PTR;
+			memcpy(task->Transmit_Data, Transmit_Data, Transmit_Data_Size);
+			task->Transmit_Data_Size = Transmit_Data_Size;
+			task->Type = eWrite_DMA;
+			task->nSS = nSS;
+
+			Enqueue(&SPI_Handle->Task_Queue, (void *)task);
+
+			return Transmit_Data_Size;
+		}
+		else
+			Task_free(SPI_Handle->Task_ID, task);
+	}
+
+	return eSPI_Failed;
 }
 
-// Blocking SPI operations
-bool SPI_Blocking_Write(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint32_t Timeout){
-    if (SPI == NULL || Data == NULL || SPI->SPI_Handle == NULL) return false;
-    
-    HAL_StatusTypeDef res = HAL_SPI_Transmit(SPI->SPI_Handle, Data, Data_Size, Timeout);
-    return (res == HAL_OK);
-}
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+	// Search for the correct spi handle
+	for(int c = 0; c < SPI_Callback_Handles.Size; c++)
+	{
+		SPI * spi = (SPI *)Queue_Peek(&SPI_Callback_Handles, c);
+		if(spi->SPI_Handle == hspi)
+		{
+			// We have found the spi handle the callback is for
 
-bool SPI_Blocking_Read(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint32_t Timeout){
-    if (SPI == NULL || Data == NULL || SPI->SPI_Handle == NULL) return false;
-    
-    HAL_StatusTypeDef res = HAL_SPI_Receive(SPI->SPI_Handle, Data, Data_Size, Timeout);
-    return (res == HAL_OK);
-}
+			// Set the chip select high
+			Set_GPIO_State_High(spi->Current_Task->nSS);
 
-bool SPI_Blocking_WriteRead(tSPI * SPI, uint8_t * TX_Data, uint8_t * RX_Data, uint16_t Data_Size, uint32_t Timeout){
-    if (SPI == NULL || TX_Data == NULL || RX_Data == NULL || SPI->SPI_Handle == NULL) return false;
-    
-    HAL_StatusTypeDef res = HAL_SPI_TransmitReceive(SPI->SPI_Handle, TX_Data, RX_Data, Data_Size, Timeout);
-    return (res == HAL_OK);
-}
+			// The transmission is complete, call the post function pointer then set the bus to free
+			if(spi->Current_Task->Post_Function != NULL)
+			{
+				spi->Current_Task->Post_Function(spi->Current_Task->Function_Data);
+			}
 
-// Blocking SPI operations with manual Chip Select
-bool SPI_Blocking_CS_Write(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint32_t Timeout){
-    if (SPI == NULL || Data == NULL || CS_Port == NULL) return false;
-    
-    SPI_CS_Assert(CS_Port, CS_Pin, CS_Active_Low);
-    bool result = SPI_Blocking_Write(SPI, Data, Data_Size, Timeout);
-    SPI_CS_Deassert(CS_Port, CS_Pin, CS_Active_Low);
-    return result;
-}
-
-bool SPI_Blocking_CS_Read(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint32_t Timeout){
-    if (SPI == NULL || Data == NULL || CS_Port == NULL) return false;
-    
-    SPI_CS_Assert(CS_Port, CS_Pin, CS_Active_Low);
-    bool result = SPI_Blocking_Read(SPI, Data, Data_Size, Timeout);
-    SPI_CS_Deassert(CS_Port, CS_Pin, CS_Active_Low);
-    return result;
-}
-
-bool SPI_Blocking_CS_WriteRead(tSPI * SPI, uint8_t * TX_Data, uint8_t * RX_Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint32_t Timeout){
-    if (SPI == NULL || TX_Data == NULL || RX_Data == NULL || CS_Port == NULL) return false;
-    
-    SPI_CS_Assert(CS_Port, CS_Pin, CS_Active_Low);
-    bool result = SPI_Blocking_WriteRead(SPI, TX_Data, RX_Data, Data_Size, Timeout);
-    SPI_CS_Deassert(CS_Port, CS_Pin, CS_Active_Low);
-    return result;
-}
-
-// Non-blocking SPI operations
-bool SPI_Write(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success){
-    if (SPI == NULL || Data == NULL || Success == NULL) return false;
-    
-    tSPI_Packet * Packet = (tSPI_Packet *)malloc(sizeof(tSPI_Packet));
-    if (Packet == NULL){
-        return false;
-    }
-    Packet->Op_type = eSPI_Write;
-    Packet->TX_Data = Data;
-    Packet->RX_Data = NULL;
-    Packet->Data_Size = Data_Size;
-    Packet->CS_Port = NULL;
-    Packet->CS_Pin = 0;
-    Packet->CS_Active_Low = true;
-    Packet->Complete_CallBack = NULL;
-    Packet->CallBack_Data = NULL;
-    Packet->Tries_timeout = Tries_timeout;
-    Packet->Success = Success;
-    
-    if (Enqueue(SPI->Packet_Queue, (void *)Packet)){
-        return true;
-    }
-    else {
-        free(Packet);
-        return false;
-    }
-}
-
-bool SPI_Read(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success){
-    if (SPI == NULL || Data == NULL || Success == NULL) return false;
-    
-    tSPI_Packet * Packet = (tSPI_Packet *)malloc(sizeof(tSPI_Packet));
-    if (Packet == NULL){
-        return false;
-    }
-    Packet->Op_type = eSPI_Read;
-    Packet->TX_Data = NULL;
-    Packet->RX_Data = Data;
-    Packet->Data_Size = Data_Size;
-    Packet->CS_Port = NULL;
-    Packet->CS_Pin = 0;
-    Packet->CS_Active_Low = true;
-    Packet->Complete_CallBack = NULL;
-    Packet->CallBack_Data = NULL;
-    Packet->Tries_timeout = Tries_timeout;
-    Packet->Success = Success;
-    
-    if (Enqueue(SPI->Packet_Queue, (void *)Packet)){
-        return true;
-    }
-    else {
-        free(Packet);
-        return false;
-    }
-}
-
-bool SPI_WriteRead(tSPI * SPI, uint8_t * TX_Data, uint8_t * RX_Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success){
-    if (SPI == NULL || TX_Data == NULL || RX_Data == NULL || Success == NULL) return false;
-    
-    tSPI_Packet * Packet = (tSPI_Packet *)malloc(sizeof(tSPI_Packet));
-    if (Packet == NULL){
-        return false;
-    }
-    Packet->Op_type = eSPI_WriteRead;
-    Packet->TX_Data = TX_Data;
-    Packet->RX_Data = RX_Data;
-    Packet->Data_Size = Data_Size;
-    Packet->CS_Port = NULL;
-    Packet->CS_Pin = 0;
-    Packet->CS_Active_Low = true;
-    Packet->Complete_CallBack = NULL;
-    Packet->CallBack_Data = NULL;
-    Packet->Tries_timeout = Tries_timeout;
-    Packet->Success = Success;
-    
-    if (Enqueue(SPI->Packet_Queue, (void *)Packet)){
-        return true;
-    }
-    else {
-        free(Packet);
-        return false;
-    }
-}
-
-// Non-blocking SPI operations with callbacks
-bool SPI_Callback_Write(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success, void (*Complete_CallBack)(void *), void * CallBack_Data){
-    if (SPI == NULL || Data == NULL || Success == NULL) return false;
-    
-    tSPI_Packet * Packet = (tSPI_Packet *)malloc(sizeof(tSPI_Packet));
-    if (Packet == NULL){
-        return false;
-    }
-    Packet->Op_type = eSPI_Write;
-    Packet->TX_Data = Data;
-    Packet->RX_Data = NULL;
-    Packet->Data_Size = Data_Size;
-    Packet->CS_Port = NULL;
-    Packet->CS_Pin = 0;
-    Packet->CS_Active_Low = true;
-    Packet->Complete_CallBack = Complete_CallBack;
-    Packet->CallBack_Data = CallBack_Data;
-    Packet->Tries_timeout = Tries_timeout;
-    Packet->Success = Success;
-    
-    if (Enqueue(SPI->Packet_Queue, (void *)Packet)){
-        return true;
-    }
-    else {
-        free(Packet);
-        return false;
-    }
-}
-
-bool SPI_Callback_Read(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success, void (*Complete_CallBack)(void *), void * CallBack_Data){
-    if (SPI == NULL || Data == NULL || Success == NULL) return false;
-    
-    tSPI_Packet * Packet = (tSPI_Packet *)malloc(sizeof(tSPI_Packet));
-    if (Packet == NULL){
-        return false;
-    }
-    Packet->Op_type = eSPI_Read;
-    Packet->TX_Data = NULL;
-    Packet->RX_Data = Data;
-    Packet->Data_Size = Data_Size;
-    Packet->CS_Port = NULL;
-    Packet->CS_Pin = 0;
-    Packet->CS_Active_Low = true;
-    Packet->Complete_CallBack = Complete_CallBack;
-    Packet->CallBack_Data = CallBack_Data;
-    Packet->Tries_timeout = Tries_timeout;
-    Packet->Success = Success;
-    
-    if (Enqueue(SPI->Packet_Queue, (void *)Packet)){
-        return true;
-    }
-    else {
-        free(Packet);
-        return false;
-    }
-}
-
-bool SPI_Callback_WriteRead(tSPI * SPI, uint8_t * TX_Data, uint8_t * RX_Data, uint16_t Data_Size, uint8_t Tries_timeout, bool * Success, void (*Complete_CallBack)(void *), void * CallBack_Data){
-    if (SPI == NULL || TX_Data == NULL || RX_Data == NULL || Success == NULL) return false;
-    
-    tSPI_Packet * Packet = (tSPI_Packet *)malloc(sizeof(tSPI_Packet));
-    if (Packet == NULL){
-        return false;
-    }
-    Packet->Op_type = eSPI_WriteRead;
-    Packet->TX_Data = TX_Data;
-    Packet->RX_Data = RX_Data;
-    Packet->Data_Size = Data_Size;
-    Packet->CS_Port = NULL;
-    Packet->CS_Pin = 0;
-    Packet->CS_Active_Low = true;
-    Packet->Complete_CallBack = Complete_CallBack;
-    Packet->CallBack_Data = CallBack_Data;
-    Packet->Tries_timeout = Tries_timeout;
-    Packet->Success = Success;
-    
-    if (Enqueue(SPI->Packet_Queue, (void *)Packet)){
-        return true;
-    }
-    else {
-        free(Packet);
-        return false;
-    }
-}
-
-// Non-blocking SPI operations with manual Chip Select
-bool SPI_CS_Write(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint8_t Tries_timeout, bool * Success){
-    if (SPI == NULL || Data == NULL || CS_Port == NULL || Success == NULL) return false;
-    
-    tSPI_Packet * Packet = (tSPI_Packet *)malloc(sizeof(tSPI_Packet));
-    if (Packet == NULL){
-        return false;
-    }
-    Packet->Op_type = eSPI_ChipSelect_Write;
-    Packet->TX_Data = Data;
-    Packet->RX_Data = NULL;
-    Packet->Data_Size = Data_Size;
-    Packet->CS_Port = CS_Port;
-    Packet->CS_Pin = CS_Pin;
-    Packet->CS_Active_Low = CS_Active_Low;
-    Packet->Complete_CallBack = NULL;
-    Packet->CallBack_Data = NULL;
-    Packet->Tries_timeout = Tries_timeout;
-    Packet->Success = Success;
-    
-    if (Enqueue(SPI->Packet_Queue, (void *)Packet)){
-        return true;
-    }
-    else {
-        free(Packet);
-        return false;
-    }
-}
-
-bool SPI_CS_Read(tSPI * SPI, uint8_t * Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint8_t Tries_timeout, bool * Success){
-    if (SPI == NULL || Data == NULL || CS_Port == NULL || Success == NULL) return false;
-    
-    tSPI_Packet * Packet = (tSPI_Packet *)malloc(sizeof(tSPI_Packet));
-    if (Packet == NULL){
-        return false;
-    }
-    Packet->Op_type = eSPI_ChipSelect_Read;
-    Packet->TX_Data = NULL;
-    Packet->RX_Data = Data;
-    Packet->Data_Size = Data_Size;
-    Packet->CS_Port = CS_Port;
-    Packet->CS_Pin = CS_Pin;
-    Packet->CS_Active_Low = CS_Active_Low;
-    Packet->Complete_CallBack = NULL;
-    Packet->CallBack_Data = NULL;
-    Packet->Tries_timeout = Tries_timeout;
-    Packet->Success = Success;
-    
-    if (Enqueue(SPI->Packet_Queue, (void *)Packet)){
-        return true;
-    }
-    else {
-        free(Packet);
-        return false;
-    }
-}
-
-bool SPI_CS_WriteRead(tSPI * SPI, uint8_t * TX_Data, uint8_t * RX_Data, uint16_t Data_Size, GPIO_TypeDef * CS_Port, uint16_t CS_Pin, bool CS_Active_Low, uint8_t Tries_timeout, bool * Success){
-    if (SPI == NULL || TX_Data == NULL || RX_Data == NULL || CS_Port == NULL || Success == NULL) return false;
-    
-    tSPI_Packet * Packet = (tSPI_Packet *)malloc(sizeof(tSPI_Packet));
-    if (Packet == NULL){
-        return false;
-    }
-    Packet->Op_type = eSPI_ChipSelect_WriteRead;
-    Packet->TX_Data = TX_Data;
-    Packet->RX_Data = RX_Data;
-    Packet->Data_Size = Data_Size;
-    Packet->CS_Port = CS_Port;
-    Packet->CS_Pin = CS_Pin;
-    Packet->CS_Active_Low = CS_Active_Low;
-    Packet->Complete_CallBack = NULL;
-    Packet->CallBack_Data = NULL;
-    Packet->Tries_timeout = Tries_timeout;
-    Packet->Success = Success;
-    
-    if (Enqueue(SPI->Packet_Queue, (void *)Packet)){
-        return true;
-    }
-    else {
-        free(Packet);
-        return false;
-    }
-}
-
-// Main SPI Task - Core state machine
-void SPI_Task(tSPI * SPI){
-    if (SPI == NULL || SPI->Busy_Flag){
-        return;
-    }
-    
-    if (SPI->Mode == eSPI_Mode_Single){
-        if (SPI->Current_Packet == NULL){
-            if (SPI->Packet_Queue->Size > 0){
-                SPI->Busy_Flag = true;
-                SPI->Current_Packet = (tSPI_Packet *)Dequeue(SPI->Packet_Queue);
-                SPI->Busy_Flag = false;
-            }
-        } else {
-            SPI->Busy_Flag = true;
-            static uint8_t SPI_Single_Attempts = 0;
-            
-            if (SPI_Single_Attempts < SPI->Current_Packet->Tries_timeout){
-                SPI_Single_Attempts++;
-                bool op_flag = false;
-                HAL_StatusTypeDef status = HAL_ERROR;
-                
-                // Handle CS assertion if required
-                if (SPI->Current_Packet->CS_Port != NULL) {
-                    SPI_CS_Assert(SPI->Current_Packet->CS_Port, SPI->Current_Packet->CS_Pin, SPI->Current_Packet->CS_Active_Low);
-                }
-                
-                switch (SPI->Current_Packet->Op_type){
-                    case eSPI_Write:
-                    case eSPI_ChipSelect_Write:
-                        if (SPI->Current_Packet->TX_Data != NULL) {
-                            status = HAL_SPI_Transmit_DMA(SPI->SPI_Handle, SPI->Current_Packet->TX_Data, SPI->Current_Packet->Data_Size);
-                        }
-                        break;
-                        
-                    case eSPI_Read:
-                    case eSPI_ChipSelect_Read:
-                        if (SPI->Current_Packet->RX_Data != NULL) {
-                            status = HAL_SPI_Receive_DMA(SPI->SPI_Handle, SPI->Current_Packet->RX_Data, SPI->Current_Packet->Data_Size);
-                        }
-                        break;
-                        
-                    case eSPI_WriteRead:
-                    case eSPI_ChipSelect_WriteRead:
-                        if (SPI->Current_Packet->TX_Data != NULL && SPI->Current_Packet->RX_Data != NULL) {
-                            status = HAL_SPI_TransmitReceive_DMA(SPI->SPI_Handle, SPI->Current_Packet->TX_Data, SPI->Current_Packet->RX_Data, SPI->Current_Packet->Data_Size);
-                        }
-                        break;
-                        
-                    default:
-                        status = HAL_ERROR;
-                        break;
-                }
-                
-                if (status == HAL_OK){
-                    op_flag = true;
-                }
-                
-                // Handle CS deassertion if required
-                if (SPI->Current_Packet->CS_Port != NULL) {
-                    SPI_CS_Deassert(SPI->Current_Packet->CS_Port, SPI->Current_Packet->CS_Pin, SPI->Current_Packet->CS_Active_Low);
-                }
-
-                if (op_flag){
-                    SPI_Single_Attempts = 0;
-                    SPI->Busy_Flag = false;
-                    if (SPI->Current_Packet->Success) {
-                        *(SPI->Current_Packet->Success) = true;
-                    }
-                    if (SPI->Current_Packet->Complete_CallBack != NULL){
-                        SPI->Current_Packet->Complete_CallBack(SPI->Current_Packet->CallBack_Data);
-                    }
-                    free(SPI->Current_Packet);
-                    SPI->Current_Packet = NULL;
-                }
-            } else {
-                // Exceeded retry attempts
-                SPI_Single_Attempts = 0;
-                SPI->Busy_Flag = false;
-                if (SPI->Current_Packet->Success) {
-                    *(SPI->Current_Packet->Success) = false;
-                }
-                free(SPI->Current_Packet);
-                SPI->Current_Packet = NULL;
-            }
-        }
-    } else if (SPI->Mode == eSPI_Mode_Continuous){
-        // Implement continuous mode if needed in the future
-        // This would handle continuous DMA transfers for streaming applications
-    }
+			spi->SPI_Busy = false;
+		}
+	}
 }
