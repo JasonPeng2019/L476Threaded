@@ -1,6 +1,6 @@
 
 /*
-* UARTThreaded.c
+* UARTZephyr.c
 *
 *  Based on UART.c
 *  Created on: Feb 19, 2025
@@ -28,8 +28,7 @@ LOG_MODULE_REGISTER(uartthreaded, LOG_LEVEL_INF);
 static tUART * g_uart_registry[UART_REGISTRY_MAX];
 static uint32_t g_uart_registry_count = 0;
 
-/* Forward declaration of the worker entry with original signature */
-static void UART_Thread_Entry(ULONG input);
+static void UART_Thread_Entry(void *p1, void *p2, void *p3);
 
 /* Zephyr UART async callback */
 static void uart_cb(const struct device *dev, struct uart_event *evt, void *user_data)
@@ -65,13 +64,6 @@ static void uart_cb(const struct device *dev, struct uart_event *evt, void *user
     }
 }
 
-/* Wrapper to keep original thread entry signature */
-static void zephyr_uart_thread_entry(void *p1, void *p2, void *p3)
-{
-    ARG_UNUSED(p2); ARG_UNUSED(p3);
-    UART_Thread_Entry((unsigned long)p1);
-}
-
 void Init_UART_CallBack_Queue(void){
    memset(g_uart_registry, 0, sizeof(g_uart_registry));
    g_uart_registry_count = 0;
@@ -104,8 +96,7 @@ tUART * Init_DMA_UART(const struct device *uart_dev)
         return NULL;
     }
 
-    /* store Zephyr device pointer */
-    UART->UART_Handle = (UART_HandleTypeDef *)uart_dev;
+    UART->UART_Handle = uart_dev;
     UART->Use_DMA = true;
     UART->UART_Enabled = true;
     UART->TX_Buffer = NULL;
@@ -136,7 +127,7 @@ tUART * Init_DMA_UART(const struct device *uart_dev)
 
     /* start the UART worker thread */
     k_thread_create(&UART->Thread, UART->Thread_Stack, UART->Thread_Stack_Size,
-                    zephyr_uart_thread_entry, UART, NULL, NULL,
+                    UART_Thread_Entry, UART, NULL, NULL,
                     K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), 0, K_NO_WAIT);
 
     /* Set up async callback and enable rx */
@@ -206,7 +197,7 @@ tUART * Init_SUDO_UART(void (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), vo
    k_mutex_init(&UART->RX_Mutex);
 
    k_thread_create(&UART->Thread, UART->Thread_Stack, UART->Thread_Stack_Size,
-                   zephyr_uart_thread_entry, UART, NULL, NULL,
+                   UART_Thread_Entry, UART, NULL, NULL,
                    K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), 0, K_NO_WAIT);
 
    return UART;
@@ -233,9 +224,11 @@ tUART * Init_SUDO_UART(void (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), vo
 * 
 * @return: None 
 */
-static void UART_Thread_Entry(ULONG input)
+static void UART_Thread_Entry(void *p1, void *p2, void *p3)
 {
-   tUART * UART = (tUART *)input;
+   ARG_UNUSED(p2);
+   ARG_UNUSED(p3);
+   tUART * UART = (tUART *)p1;
 
    while(1)
    {

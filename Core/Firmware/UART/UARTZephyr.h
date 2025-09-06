@@ -1,5 +1,5 @@
 /*
- * UARTThreaded.h
+ * UARTZephyr.h
  *
  *  Based on UART.h
  *  Created on: Feb 19, 2025
@@ -46,15 +46,9 @@
     void  (*SUDO_Receive)(tUART * UART, uint8_t * Data, uint16_t * Data_Size);
 } SUDO_UART;
  
- /*
-  * In Zephyr, we map the STM32 HAL type name to the Zephyr device pointer
-  * so existing function signatures remain unchanged for callers of this header.
-  */
- typedef const struct device UART_HandleTypeDef;
- 
  struct tUART {
-    UART_HandleTypeDef * UART_Handle;   /* actually const struct device * in Zephyr */
-    bool Use_DMA;                       /* kept for compatibility; Zephyr abstracts DMA */
+    const struct device * UART_Handle;   /* Zephyr device pointer for UART */
+    bool Use_DMA;                      
     volatile bool UART_Enabled;
     uint8_t RX_Buffer[UART_RX_BUFF_SIZE];
     volatile uint16_t RX_Buff_Tail_Idx;
@@ -82,7 +76,7 @@
  };
  
  void Init_UART_CallBack_Queue(void);
- tUART * Init_DMA_UART(UART_HandleTypeDef * UART_Handle);
+ tUART * Init_DMA_UART(const struct device * UART_Handle);
  tUART * Init_SUDO_UART(void (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), void (*Receive_Func_Ptr)(tUART*, uint8_t*, uint16_t*));
  void Enable_UART(tUART * UART);
  void Disable_UART(tUART * UART);
