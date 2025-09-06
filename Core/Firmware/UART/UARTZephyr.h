@@ -42,9 +42,9 @@
  typedef struct tUART tUART;
  
  typedef struct {
-     void * (*SUDO_Transmit)(tUART * UART, uint8_t * Data, uint16_t Data_Size);
-     void * (*SUDO_Receive)(tUART * UART, uint8_t * Data, uint16_t * Data_Size);
- } SUDO_UART;
+    void  (*SUDO_Transmit)(tUART * UART, uint8_t * Data, uint16_t Data_Size);
+    void  (*SUDO_Receive)(tUART * UART, uint8_t * Data, uint16_t * Data_Size);
+} SUDO_UART;
  
  /*
   * In Zephyr, we map the STM32 HAL type name to the Zephyr device pointer
@@ -53,24 +53,24 @@
  typedef const struct device UART_HandleTypeDef;
  
  struct tUART {
-     UART_HandleTypeDef * UART_Handle;   /* actually const struct device * in Zephyr */
-     bool Use_DMA;                       /* kept for compatibility; Zephyr abstracts DMA */
-     volatile bool UART_Enabled;
-     uint8_t RX_Buffer[UART_RX_BUFF_SIZE];
-     volatile uint16_t RX_Buff_Tail_Idx;
-     volatile uint16_t RX_Buff_Head_Idx;
- 
-     /* Zephyr kernel primitives (replace ThreadX) */
-     struct k_msgq   TX_Queue;           // queue of TX_Node * (stored as void*)
-     struct k_sem    TX_Done_Sem;        // signaled by Tx complete event
-     struct k_mutex  RX_Mutex;           // protect RX indices
-     struct k_thread Thread;             // UART worker thread
- 
-     /* Allocations for RTOS objects */
-     k_thread_stack_t * Thread_Stack;    // allocated stack
-     size_t           Thread_Stack_Size; 
-     void *           Queue_Storage;     // storage for msgq
-     size_t           Queue_Length;      // number of entries in queue
+    UART_HandleTypeDef * UART_Handle;   /* actually const struct device * in Zephyr */
+    bool Use_DMA;                       /* kept for compatibility; Zephyr abstracts DMA */
+    volatile bool UART_Enabled;
+    uint8_t RX_Buffer[UART_RX_BUFF_SIZE];
+    volatile uint16_t RX_Buff_Tail_Idx;
+    volatile uint16_t RX_Buff_Head_Idx;
+
+    /* Zephyr kernel primitives (replace ThreadX) */
+    struct k_msgq   TX_Queue;           // queue of TX_Node * (stored as void*)
+    struct k_sem    TX_Done_Sem;        // signaled by Tx complete event
+    struct k_mutex  RX_Mutex;           // protect RX indices
+    struct k_thread Thread;             // UART worker thread
+
+    /* Allocations for RTOS objects */
+    K_THREAD_STACK_MEMBER(Thread_Stack, 1024); // per-instance stack storage
+    size_t           Thread_Stack_Size; 
+    void *           Queue_Storage;     // storage for msgq
+    size_t           Queue_Length;      // number of entries in queue
  
      TX_Node *       TX_Buffer;          // currently transmitting buffer
      volatile bool   Currently_Transmitting;
@@ -83,12 +83,12 @@
  
  void Init_UART_CallBack_Queue(void);
  tUART * Init_DMA_UART(UART_HandleTypeDef * UART_Handle);
- tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), void * (*Recieve_Func_Ptr)(tUART*, uint8_t*, uint16_t*));
+ tUART * Init_SUDO_UART(void (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), void (*Receive_Func_Ptr)(tUART*, uint8_t*, uint16_t*));
  void Enable_UART(tUART * UART);
  void Disable_UART(tUART * UART);
- int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size);
+ int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint16_t Data_Size);
  void UART_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size);
- int8_t UART_SUDO_Recieve(tUART * UART, uint8_t * Data, uint16_t * Data_Size);
+ int8_t UART_SUDO_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size);
  void Modify_UART_Baudrate(tUART * UART, int32_t New_Baudrate);
  void UART_Flush_TX(tUART * UART);
  void UART_Delete(tUART * UART);

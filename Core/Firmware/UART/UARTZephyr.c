@@ -9,10 +9,20 @@
 *  Modified on: Aug 18, 2025
 *      Author: buh07
 */
-#include "UARTAzure.h"
-
+#include "UARTZephyr.h"
+#include <zephyr/device.h>
+#include <zephyr/drivers/uart.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/sys/util.h>
+#include <string.h>
 #include <zephyr/logging/log.h>
+
 LOG_MODULE_REGISTER(uartthreaded, LOG_LEVEL_INF);
+
+#ifndef CONFIG_UARTTHREADED_THREAD_PRIORITY
+#define CONFIG_UARTTHREADED_THREAD_PRIORITY 5
+#endif
 
 #define UART_REGISTRY_MAX 8
 static tUART * g_uart_registry[UART_REGISTRY_MAX];
@@ -20,10 +30,6 @@ static uint32_t g_uart_registry_count = 0;
 
 /* Forward declaration of the worker entry with original signature */
 static void UART_Thread_Entry(ULONG input);
-
-/* File-scope stacks for thread(s) */
-K_THREAD_STACK_DEFINE(uart_thread_stack0, 1024);
-K_THREAD_STACK_DEFINE(sudo_uart_thread_stack0, 1024);
 
 /* Zephyr UART async callback */
 static void uart_cb(const struct device *dev, struct uart_event *evt, void *user_data)
@@ -81,61 +87,73 @@ void Init_UART_CallBack_Queue(void){
 * 
 * @returns: tUART of UART initialized
 */
-tUART * Init_DMA_UART(UART_HandleTypeDef * UART_Handle){
-   tUART * UART = (tUART*)k_calloc(1, sizeof(tUART));
-   if (UART == NULL){
-       LOG_ERR("Init_DMA_UART: malloc failed");
-       return NULL;
-   }
+tUART * Init_DMA_UART(const struct device *uart_dev)
+{
+    if (!uart_dev) {
+        LOG_ERR("Init_DMA_UART: uart_dev is NULL");
+        return NULL;
+    }
+    if (!device_is_ready(uart_dev)) {
+        LOG_ERR("Init_DMA_UART: device not ready");
+        return NULL;
+    }
 
-   UART->UART_Handle = UART_Handle; /* const struct device * */
-   UART->Use_DMA = true;
-   UART->UART_Enabled = true;
-   UART->TX_Buffer = NULL;
-   UART->Currently_Transmitting = false;
-   UART->RX_Buff_Head_Idx = 0;
-   UART->RX_Buff_Tail_Idx = 0;
-   UART->SUDO_Handler = NULL;
+    tUART * UART = (tUART*)k_calloc(1, sizeof(tUART));
+    if (UART == NULL){
+        LOG_ERR("Init_DMA_UART: malloc failed");
+        return NULL;
+    }
 
-   /* Register for callbacks (kept for parity with original) */
-   if (g_uart_registry_count < UART_REGISTRY_MAX){
-       g_uart_registry[g_uart_registry_count++] = UART;
-   }
+    /* store Zephyr device pointer */
+    UART->UART_Handle = (UART_HandleTypeDef *)uart_dev;
+    UART->Use_DMA = true;
+    UART->UART_Enabled = true;
+    UART->TX_Buffer = NULL;
+    UART->Currently_Transmitting = false;
+    UART->RX_Buff_Head_Idx = 0;
+    UART->RX_Buff_Tail_Idx = 0;
+    UART->SUDO_Handler = NULL;
 
-   /* Create Zephyr primitives */
-   UART->Thread_Stack_Size = 1024;
-   UART->Thread_Stack = uart_thread_stack0;
+    /* Register for callbacks*/
+    if (g_uart_registry_count < UART_REGISTRY_MAX){
+        g_uart_registry[g_uart_registry_count++] = UART;
+    }
 
-   UART->Queue_Length = 16;
-   /* Queue stores pointers; use void* sized messages */
-   UART->Queue_Storage = k_calloc(UART->Queue_Length, sizeof(void*));
-   if(UART->Queue_Storage == NULL){
-       LOG_ERR("Init_DMA_UART: queue storage malloc failed");
-       return NULL;
-   }
+    /* Create Zephyr primitives */
+    UART->Thread_Stack_Size = K_THREAD_STACK_SIZEOF(UART->Thread_Stack);
 
-   k_msgq_init(&UART->TX_Queue, UART->Queue_Storage, sizeof(void*), UART->Queue_Length);
-   k_sem_init(&UART->TX_Done_Sem, 0, 1);
-   k_mutex_init(&UART->RX_Mutex);
+    UART->Queue_Length = 16;
+    UART->Queue_Storage = k_calloc(UART->Queue_Length, sizeof(void*));
+    if(UART->Queue_Storage == NULL){
+        LOG_ERR("Init_DMA_UART: queue storage malloc failed");
+        k_free(UART);
+        return NULL;
+    }
 
-   k_thread_create(&UART->Thread, UART->Thread_Stack, UART->Thread_Stack_Size,
-                   zephyr_uart_thread_entry, UART, NULL, NULL,
-                   K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), 0, K_NO_WAIT);
+    k_msgq_init(&UART->TX_Queue, UART->Queue_Storage, sizeof(void*), UART->Queue_Length);
+    k_sem_init(&UART->TX_Done_Sem, 0, 1);
+    k_mutex_init(&UART->RX_Mutex);
 
-   /* set up RX via async API */
-   int rc;
-   rc = uart_callback_set(UART->UART_Handle, uart_cb, UART);
-   if (rc) {
-       LOG_ERR("uart_callback_set failed: %d", rc);
-       return UART; /* allow caller to decide; RX will not work */
-   }
-   rc = uart_rx_enable(UART->UART_Handle, UART->RX_Tmp, sizeof(UART->RX_Tmp), K_FOREVER);
-   if (rc) {
-       LOG_ERR("uart_rx_enable failed: %d", rc);
-       /* Leave initialized but without RX */
-   }
+    /* start the UART worker thread */
+    k_thread_create(&UART->Thread, UART->Thread_Stack, UART->Thread_Stack_Size,
+                    zephyr_uart_thread_entry, UART, NULL, NULL,
+                    K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), 0, K_NO_WAIT);
 
-   return UART;
+    /* Set up async callback and enable rx */
+    int rc = uart_callback_set(uart_dev, uart_cb, UART);
+    if (rc) {
+        LOG_ERR("Init_DMA_UART: uart_callback_set failed: %d", rc);
+        /* We keep UART object, but RX won't work */
+    } else {
+        /* Ensure RX_Tmp buffer exists inside tUART and is persistent (not stack) */
+        rc = uart_rx_enable(uart_dev, UART->RX_Tmp, sizeof(UART->RX_Tmp), K_FOREVER);
+        if (rc) {
+            LOG_ERR("Init_DMA_UART: uart_rx_enable failed: %d", rc);
+            /* continue — TX side still works */
+        }
+    }
+
+    return UART;
 }
 
 /**
@@ -147,7 +165,7 @@ tUART * Init_DMA_UART(UART_HandleTypeDef * UART_Handle){
 * 
 * @returns: tUART struct initialized and malloc-ed
 * */
-tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), void * (*Receive_Func_Ptr)(tUART*, uint8_t*, uint16_t*)){
+tUART * Init_SUDO_UART(void (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), void (*Receive_Func_Ptr)(tUART*, uint8_t*, uint16_t*)){
    tUART * UART = (tUART*)k_calloc(1, sizeof(tUART));
    if (UART == NULL){
        LOG_ERR("Init_SUDO_UART: malloc failed");
@@ -172,8 +190,7 @@ tUART * Init_SUDO_UART(void * (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), 
    UART->SUDO_Handler->SUDO_Receive  = Receive_Func_Ptr;
 
    /* Create Zephyr primitives similar to DMA UART */
-   UART->Thread_Stack_Size = 1024;
-   UART->Thread_Stack = sudo_uart_thread_stack0;
+   UART->Thread_Stack_Size = K_THREAD_STACK_SIZEOF(UART->Thread_Stack);
 
    UART->Queue_Length = 16;
    UART->Queue_Storage = k_calloc(UART->Queue_Length, sizeof(void*));
@@ -357,7 +374,7 @@ void UART_Delete(tUART * UART){
  * 
  * @return: Data_Size if success, 0 if transmit was unsuccessful, -1 for malloc error.
  */
-int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size){
+int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint16_t Data_Size){
     /* check if transmits are enabled */
     if (!UART->UART_Enabled){
         LOG_WRN("UART_Add_Transmit: UART disabled");
@@ -429,7 +446,7 @@ void UART_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size){
     k_mutex_unlock(&UART->RX_Mutex);
 }
 
-int8_t UART_SUDO_Recieve(tUART * UART, uint8_t * Data, uint16_t * Data_Size){
+int8_t UART_SUDO_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size){
     if(UART->SUDO_Handler == NULL)
         return 0;
     UART->SUDO_Handler->SUDO_Receive(UART, Data, Data_Size);
@@ -437,33 +454,39 @@ int8_t UART_SUDO_Recieve(tUART * UART, uint8_t * Data, uint16_t * Data_Size){
 }
 
 void Modify_UART_Baudrate(tUART * UART, int32_t New_Baudrate){
-    if(!UART->UART_Enabled)
+    if(!UART || !UART->UART_Enabled || !UART->UART_Handle)
         return;
 
-    /* Flush any messages queued to go out */
+    /* Flush pending TX */
     UART_Flush_TX(UART);
 
-    /* Stop the receiver DMA -> does DMA stop clear the RX Buffer? */
-        uart_rx_disable(UART->UART_Handle);
+    const struct device *dev = (const struct device *)UART->UART_Handle;
+
+    /* disable RX while we reconfigure */
+    uart_rx_disable(dev);
     UART->RX_Buff_Tail_Idx = 0;
 
     struct uart_config cfg;
-    int rc = uart_config_get(UART->UART_Handle, &cfg);
-    if (rc == 0) {
+    int rc = uart_config_get(dev, &cfg);
+    if (rc != 0) {
+        LOG_ERR("Modify_UART_Baudrate: uart_config_get failed: %d", rc);
+    } else {
         cfg.baudrate = New_Baudrate;
-        rc = uart_configure(UART->UART_Handle, &cfg);
+        rc = uart_configure(dev, &cfg);
         if (rc) {
             LOG_ERR("Modify_UART_Baudrate: uart_configure failed: %d", rc);
+        } else {
+            LOG_INF("Modify_UART_Baudrate: set baud to %d", New_Baudrate);
         }
-    } else {
-        LOG_ERR("Modify_UART_Baudrate: uart_config_get failed: %d", rc);
     }
 
-    rc = uart_rx_enable(UART->UART_Handle, UART->RX_Tmp, sizeof(UART->RX_Tmp), K_FOREVER);
+    /* re-enable RX */
+    rc = uart_rx_enable(dev, UART->RX_Tmp, sizeof(UART->RX_Tmp), K_FOREVER);
     if (rc) {
         LOG_ERR("Modify_UART_Baudrate: uart_rx_enable failed: %d", rc);
     }
 }
+
 
 void UART_Flush_TX(tUART * uart)
 {
@@ -476,20 +499,4 @@ void UART_Flush_TX(tUART * uart)
             break;
         k_msleep(1);
     }
-}
-
-/* HAL stubs retained for compatibility, not used */
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
-{
-    ARG_UNUSED(huart);
-}
-
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-    ARG_UNUSED(huart);
-}
-
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-    ARG_UNUSED(huart);
 }
