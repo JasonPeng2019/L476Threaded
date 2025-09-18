@@ -42,6 +42,7 @@ LOG_MODULE_REGISTER(uartthreaded, LOG_LEVEL_INF);
 static tUART * g_uart_registry[UART_REGISTRY_MAX];
 static uint32_t g_uart_registry_count = 0;
 static struct k_mutex g_uart_registry_lock;
+static struct k_mutex g_polling_init_lock;
 
 static void UART_Thread_Entry(void *p1, void *p2, void *p3);
 
@@ -74,6 +75,7 @@ void Init_UART_CallBack_Queue(void){
     memset(g_uart_registry, 0, sizeof(g_uart_registry));
     g_uart_registry_count = 0;
     k_mutex_init(&g_uart_registry_lock);
+    k_mutex_init(&g_polling_init_lock);
     g_uart_event_queue = queue_init(); // Assuming queue is init this way
     k_work_init(&poll_work, uart_poll_work_handler);
     k_timer_init(&poll_timer, poll_timer_handler, NULL);
@@ -82,12 +84,15 @@ void Init_UART_CallBack_Queue(void){
         k_pipe_init(&g_uart_pipes[i], g_uart_pipe_buf[i], sizeof(g_uart_pipe_buf[i]), 4);
     }
 
-    if (!g_polling_started) {
-           k_thread_create(&uart_poll_thread_data, uart_poll_stack, UART_POLL_STACK_SIZE,
-                           uart_poll_thread, NULL, NULL, NULL,
-                           K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), K_ESSENTIAL, K_NO_WAIT);
-           k_timer_start(&poll_timer, K_MSEC(10), K_MSEC(10));
-           g_polling_started = true;
+    if (k_mutex_lock(&g_polling_init_lock, K_FOREVER) == 0) {
+        if (!g_polling_started) {
+            k_thread_create(&uart_poll_thread_data, uart_poll_stack, UART_POLL_STACK_SIZE,
+                            uart_poll_thread, NULL, NULL, NULL,
+                            K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), K_ESSENTIAL, K_NO_WAIT);
+            k_timer_start(&poll_timer, K_MSEC(10), K_MSEC(10));
+            g_polling_started = true;
+        }
+        k_mutex_unlock(&g_polling_init_lock);
     }
 }
 
@@ -102,37 +107,26 @@ static void uart_poll_thread(void *p1, void *p2, void *p3)
             void *tok = queue_get(g_uart_event_queue);
             ARG_UNUSED(tok);
 
-            tUART *locked_list[UART_REGISTRY_MAX];
-            uint32_t locked_count = 0;
-
             if (k_mutex_lock(&g_uart_registry_lock, K_FOREVER) == 0) {
-                for (size_t i = 0; i < g_uart_registry_count && locked_count < UART_REGISTRY_MAX; ++i) {
+                for (size_t i = 0; i < g_uart_registry_count; ++i) {
                     tUART *u = g_uart_registry[i];
                     if (!u) continue;
+
+                    /* Try to lock this UART's state mutex with no wait to avoid blocking */
                     if (k_mutex_lock(&u->state_mutex, K_NO_WAIT) == 0) {
-                        locked_list[locked_count++] = u;
+                        if (u->UART_Handle && u->UART_Enabled) {
+                            uint8_t ch;
+                            while (uart_poll_in(u->UART_Handle, &ch) == 0) {
+                                size_t bytes_written = 0;
+                                int rc = k_pipe_write(&u->RX_Pipe, &ch, 1, &bytes_written, K_NO_WAIT);
+                                ARG_UNUSED(rc);
+                                ARG_UNUSED(bytes_written);
+                            }
+                        }
+                        k_mutex_unlock(&u->state_mutex);
                     }
                 }
                 k_mutex_unlock(&g_uart_registry_lock);
-            }
-
-            for (size_t i = 0; i < locked_count; ++i) {
-                tUART *u = locked_list[i];
-                if (!u) continue;
-                if (!u->UART_Handle || !u->UART_Enabled) {
-                    k_mutex_unlock(&u->state_mutex);
-                    continue;
-                }
-
-                uint8_t ch;
-                while (uart_poll_in(u->UART_Handle, &ch) == 0) {
-                    size_t bytes_written = 0;
-                    int rc = k_pipe_write(&u->RX_Pipe, &ch, 1, &bytes_written, K_NO_WAIT);
-                    ARG_UNUSED(rc);
-                    ARG_UNUSED(bytes_written);
-                }
-
-                k_mutex_unlock(&u->state_mutex);
             }
         }
     }
@@ -270,6 +264,7 @@ tUART * Init_SUDO_UART(void (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), vo
     if (UART == NULL) {
         LOG_ERR("Init_SUDO_UART: malloc failed");
         return NULL;
+        
     }
 
     UART->UART_Handle = NULL;
@@ -333,6 +328,7 @@ tUART * Init_SUDO_UART(void (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), vo
 }
 
 void Enable_UART(tUART * UART){
+    if (!UART) return;
     if (k_mutex_lock(&UART->state_mutex, K_FOREVER) == 0) {
          UART->TX_Buffer = NULL;
          UART->Currently_Transmitting = false;
@@ -342,31 +338,40 @@ void Enable_UART(tUART * UART){
 }
 
 void Disable_UART(tUART * UART){
+    if (!UART) return;
+
+    /* Disable UART under mutex protection to stop new transmits */
+    if (k_mutex_lock(&UART->state_mutex, K_FOREVER) == 0) {
+        UART->UART_Enabled = false;
+        k_mutex_unlock(&UART->state_mutex);
+    }
+
+    /* Wait for any ongoing transmission to complete */
     UART_Flush_TX(UART);
-   if (UART->Use_DMA == true && UART->UART_Handle){
-       LOG_INF("Disable_UART: waiting for RX to disable");
-       uart_rx_disable(UART->UART_Handle);
-       LOG_INF("Disable_UART: RX disabled");
-   }
 
-   TX_Node * node;
-   while(k_msgq_get(&UART->TX_Queue, &node, K_NO_WAIT) == 0){
-       if(node){
-           k_free(node->Data);
-           k_free(node);
-       }
-   }
-   if(UART->TX_Buffer){
-       k_free(UART->TX_Buffer->Data);
-       k_free(UART->TX_Buffer);
-       UART->TX_Buffer = NULL;
-   }
+    if (UART->Use_DMA == true && UART->UART_Handle){
+        LOG_INF("Disable_UART: waiting for RX to disable");
+        uart_rx_disable(UART->UART_Handle);
+        LOG_INF("Disable_UART: RX disabled");
+    }
 
-   if (k_mutex_lock(&UART->state_mutex, K_FOREVER) == 0) {
-       UART->Currently_Transmitting = false;
-       UART->UART_Enabled = false;
-       k_mutex_unlock(&UART->state_mutex);
-   }
+    /* Now clean up remaining queue items under mutex protection */
+    if (k_mutex_lock(&UART->state_mutex, K_FOREVER) == 0) {
+        TX_Node * node;
+        while(k_msgq_get(&UART->TX_Queue, &node, K_NO_WAIT) == 0){
+            if(node){
+                k_free(node->Data);
+                k_free(node);
+            }
+        }
+        if(UART->TX_Buffer){
+            k_free(UART->TX_Buffer->Data);
+            k_free(UART->TX_Buffer);
+            UART->TX_Buffer = NULL;
+        }
+        UART->Currently_Transmitting = false;
+        k_mutex_unlock(&UART->state_mutex);
+    }
 }
 
 void UART_Delete(tUART * UART){
@@ -402,11 +407,11 @@ void UART_Delete(tUART * UART){
 }
 
 int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint16_t Data_Size){
-    /* Check if transmits are enabled */
-    if (!UART->UART_Enabled){
-        LOG_WRN("UART_Add_Transmit: UART disabled");
+    if (!UART || !Data) {
+        LOG_WRN("UART_Add_Transmit: Invalid parameters");
         return 0;
     }
+
     /* If data size is too big, fails; */
     if (Data_Size > MAX_TX_BUFF_SIZE){
         LOG_WRN("UART_Add_Transmit: data too big (%u)", Data_Size);
@@ -438,11 +443,12 @@ int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint16_t Data_Size){
         return 0;
     }
 
-    /* Re-check enabled under lock to avoid enqueuing after disable/delete */
+    /* Check if transmits are enabled under mutex protection */
     if (!UART->UART_Enabled) {
         k_free(data_To_Add);
         k_free(node);
         k_mutex_unlock(&UART->state_mutex);
+        LOG_WRN("UART_Add_Transmit: UART disabled");
         return 0;
     }
 
@@ -483,6 +489,10 @@ void UART_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size){
 }
 
 int8_t UART_SUDO_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size){
+    if (!UART || !Data || !Data_Size) {
+        if (Data_Size) *Data_Size = 0;
+        return 0;
+    }
     if(UART->SUDO_Handler == NULL)
         return 0;
     UART->SUDO_Handler->SUDO_Receive(UART, Data, Data_Size);
@@ -491,11 +501,22 @@ int8_t UART_SUDO_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size){
 
 void UART_Flush_TX(tUART * uart)
 {
-    if(!uart->UART_Enabled)
-        return;
+    if (!uart) return;
+
+    /* Check enabled status under mutex protection */
+    if (k_mutex_lock(&uart->state_mutex, K_FOREVER) != 0) return;
+    bool enabled = uart->UART_Enabled;
+    k_mutex_unlock(&uart->state_mutex);
+
+    if (!enabled) return;
 
     while(1){
-        if (k_msgq_num_used_get(&uart->TX_Queue) == 0 && !uart->Currently_Transmitting)
+        if (k_mutex_lock(&uart->state_mutex, K_FOREVER) != 0) return;
+        bool queue_empty = (k_msgq_num_used_get(&uart->TX_Queue) == 0);
+        bool not_transmitting = !uart->Currently_Transmitting;
+        k_mutex_unlock(&uart->state_mutex);
+
+        if (queue_empty && not_transmitting)
             break;
         k_msleep(1);
     }

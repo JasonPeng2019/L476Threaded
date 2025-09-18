@@ -53,7 +53,7 @@ typedef struct tUART_s {
     size_t Queue_Length;
 
     TX_Node * TX_Buffer;
-    volatile bool Currently_Transmitting;
+    bool Currently_Transmitting;
 
     struct k_sem TX_Done_Sem;
 
@@ -73,5 +73,5 @@ tUART * Init_SUDO_UART(void (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), vo
 void Enable_UART(tUART * UART);
 void Disable_UART(tUART * UART);
 void UART_Delete(tUART * UART);
-int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint8_t Data_Size);
+int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint16_t Data_Size);
 void UART_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size);
