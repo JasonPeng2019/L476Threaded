@@ -50,19 +50,21 @@
     const struct device * UART_Handle;   /* Zephyr device pointer for UART */
     bool Use_DMA;                      
     volatile bool UART_Enabled;
-    uint8_t RX_Buffer[UART_RX_BUFF_SIZE];
-    volatile uint16_t RX_Buff_Tail_Idx;
-    volatile uint16_t RX_Buff_Head_Idx;
+    /* legacy ring buffer removed: use k_pipe for RX buffering */
+    /* uint8_t RX_Buffer[UART_RX_BUFF_SIZE];
+       volatile uint16_t RX_Buff_Tail_Idx;
+       volatile uint16_t RX_Buff_Head_Idx; */
 
     /* Zephyr kernel primitives (replace ThreadX) */
     struct k_msgq   TX_Queue;           // queue of TX_Node * (stored as void*)
     struct k_sem    TX_Done_Sem;        // signaled by Tx complete event
-    struct k_mutex  RX_Mutex;           // protect RX indices
+    struct k_spinlock RX_Spinlock;      // protect RX indices (atomic)
     struct k_thread Thread;             // UART worker thread
 
     /* Allocations for RTOS objects */
-    K_THREAD_STACK_MEMBER(Thread_Stack, 1024); // per-instance stack storage
-    size_t           Thread_Stack_Size; 
+    /* per-instance stack storage: use a portable static buffer */
+    uint8_t Thread_Stack[1024];
+    size_t  Thread_Stack_Size;
     void *           Queue_Storage;     // storage for msgq
     size_t           Queue_Length;      // number of entries in queue
  
@@ -73,6 +75,10 @@
  
      /* Async RX helper buffer */
      uint8_t         RX_Tmp[64];
+    /* Pipe for RX (Zephyr kernel pipe) */
+    struct k_pipe   RX_Pipe;
+    uint8_t *       RX_Pipe_Storage;
+    size_t          RX_Pipe_Size;
  };
  
  void Init_UART_CallBack_Queue(void);

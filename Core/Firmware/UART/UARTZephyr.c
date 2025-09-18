@@ -10,6 +10,7 @@
 *      Author: buh07
 */
 #include "UARTZephyr.h"
+#include "queue.c"
 #include <zephyr/device.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/kernel.h>
@@ -19,6 +20,12 @@
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(uartthreaded, LOG_LEVEL_INF);
+
+/* Static-check fallbacks: if kernel structs aren't visible to the analyzer, provide opaque typedefs */
+#ifndef __ZEPHYR__
+typedef struct k_poll_event k_poll_event_t;
+typedef struct k_poll_signal k_poll_signal_t;
+#endif
 
 #ifndef CONFIG_UARTTHREADED_THREAD_PRIORITY
 #define CONFIG_UARTTHREADED_THREAD_PRIORITY 5
@@ -30,44 +37,91 @@ static uint32_t g_uart_registry_count = 0;
 
 static void UART_Thread_Entry(void *p1, void *p2, void *p3);
 
-/* Zephyr UART async callback */
-static void uart_cb(const struct device *dev, struct uart_event *evt, void *user_data)
-{
-    tUART *uart = (tUART *)user_data;
-    if (!uart) return;
+/* Polling primitives */
+/* event queue provided by queue.c (peek-capable) */
+static void *g_uart_event_queue = NULL; /* opaque queue handle from queue.c */
+static struct k_work poll_work;
+static struct k_timer poll_timer;
+static struct k_poll_signal g_poll_signal;
+static struct k_pipe g_uart_pipes[UART_REGISTRY_MAX];
+static uint8_t g_uart_pipe_buf[UART_REGISTRY_MAX][UART_RX_BUFF_SIZE];
+/* poll thread */
+#define UART_POLL_STACK_SIZE 512
+K_THREAD_STACK_DEFINE(uart_poll_stack, UART_POLL_STACK_SIZE);
+static struct k_thread uart_poll_thread_data;
+static bool g_polling_started = false;
+static void uart_poll_work_handler(struct k_work *work);
+static void poll_timer_handler(struct k_timer *timer){ ARG_UNUSED(timer); k_work_submit(&poll_work); }
+static void uart_poll_thread(void *p1, void *p2, void *p3);
 
-    switch (evt->type) {
-    case UART_TX_DONE:
-        k_sem_give(&uart->TX_Done_Sem);
-        break;
-    case UART_RX_RDY: {
-        size_t off = evt->data.rx.offset;
-        size_t len = evt->data.rx.len;
-        const uint8_t *buf = evt->data.rx.buf + off;
-        k_mutex_lock(&uart->RX_Mutex, K_FOREVER);
-        for (size_t i = 0; i < len; ++i) {
-            uart->RX_Buffer[uart->RX_Buff_Head_Idx++] = buf[i];
-            if (uart->RX_Buff_Head_Idx >= UART_RX_BUFF_SIZE) uart->RX_Buff_Head_Idx = 0;
-        }
-        k_mutex_unlock(&uart->RX_Mutex);
-        break;
-    }
-    case UART_RX_DISABLED:
-        /* keep RX enabled continuously */
-        uart_rx_enable(dev, uart->RX_Tmp, sizeof(uart->RX_Tmp), K_FOREVER);
-        break;
-    case UART_RX_BUF_REQUEST:
-    case UART_RX_BUF_RELEASED:
-    case UART_TX_ABORTED:
-    default:
-        break;
-    }
+static void uart_poll_thread(void *p1, void *p2, void *p3);
+static void uart_poll_timer_handler(struct k_timer *timer){ ARG_UNUSED(timer); }
+
+/* (no polling primitives by default) */
+
+/* Poll work: push a token into FIFO so the poll thread wakes and polls UARTs */
+static void uart_poll_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    /* push a simple token into FIFO (use pointer to sentinel) */
+    static void *token = (void*)1;
+    if (g_uart_event_queue) queue_put(g_uart_event_queue, token);
+    k_poll_signal_raise(&g_poll_signal, 0);
 }
 
 void Init_UART_CallBack_Queue(void){
-   memset(g_uart_registry, 0, sizeof(g_uart_registry));
-   g_uart_registry_count = 0;
+    memset(g_uart_registry, 0, sizeof(g_uart_registry));
+    g_uart_registry_count = 0;
+       /* init FIFO, work, timer, pipes */
+        /* init peekable queue from queue.c */
+        g_uart_event_queue = queue_init();
+        k_work_init(&poll_work, uart_poll_work_handler);
+        k_timer_init(&poll_timer, poll_timer_handler, NULL);
+        k_poll_signal_init(&g_poll_signal);
+       for (size_t i = 0; i < UART_REGISTRY_MAX; ++i) {
+           k_pipe_init(&g_uart_pipes[i], g_uart_pipe_buf[i], sizeof(g_uart_pipe_buf[i]));
+       }
+
+       /* start poll thread and timer once */
+       if (!g_polling_started) {
+           k_thread_create(&uart_poll_thread_data, uart_poll_stack, UART_POLL_STACK_SIZE,
+                           uart_poll_thread, NULL, NULL, NULL,
+                           K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), K_ESSENTIAL, K_NO_WAIT);
+           k_timer_start(&poll_timer, K_MSEC(10), K_MSEC(10));
+           g_polling_started = true;
+       }
 }
+
+    /* poll thread: wait on poll signal and drain the peekable queue; poll all registered UARTs */
+static void uart_poll_thread(void *p1, void *p2, void *p3)
+    {
+        ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
+        struct k_poll_event evt;
+        while (1) {
+            k_poll_event_init(&evt, K_POLL_TYPE_SIGNAL, K_POLL_MODE_NOTIFY_ONLY, &g_poll_signal);
+            k_poll(&evt, 1, K_FOREVER);
+
+            /* drain queue using peek then get */
+            while (g_uart_event_queue && queue_peek(g_uart_event_queue) != NULL) {
+                void *tok = queue_get(g_uart_event_queue);
+                ARG_UNUSED(tok);
+
+                /* poll each registered UART for available bytes */
+                for (size_t i = 0; i < g_uart_registry_count; ++i) {
+                    tUART *u = g_uart_registry[i];
+                    if (!u || !u->UART_Handle || !u->UART_Enabled) continue;
+
+                    uint8_t ch;
+                    while (uart_poll_in(u->UART_Handle, &ch) == 0) {
+                        /* write received byte directly into the per-UART pipe */
+                        size_t bytes_written = 0;
+                        int rc = k_pipe_write(&u->RX_Pipe, &ch, 1, &bytes_written, K_NO_WAIT);
+                        ARG_UNUSED(rc);
+                        ARG_UNUSED(bytes_written);
+                    }
+            }
+        }
+    }
 
 /** 
 *@brief: malloc a UART, and initialize UART struct members for a UART using DMA. Add it to the callback
@@ -101,9 +155,17 @@ tUART * Init_DMA_UART(const struct device *uart_dev)
     UART->UART_Enabled = true;
     UART->TX_Buffer = NULL;
     UART->Currently_Transmitting = false;
-    UART->RX_Buff_Head_Idx = 0;
-    UART->RX_Buff_Tail_Idx = 0;
+    /* legacy ring indices removed; RX now uses k_pipe */
     UART->SUDO_Handler = NULL;
+
+    /* allocate per-instance pipe storage and init pipe */
+    UART->RX_Pipe_Storage = k_calloc(UART_RX_BUFF_SIZE, 1);
+    if (UART->RX_Pipe_Storage) {
+        UART->RX_Pipe_Size = UART_RX_BUFF_SIZE;
+        k_pipe_init(&UART->RX_Pipe, UART->RX_Pipe_Storage, UART->RX_Pipe_Size);
+    } else {
+        UART->RX_Pipe_Size = 0;
+    }
 
     /* Register for callbacks*/
     if (g_uart_registry_count < UART_REGISTRY_MAX){
@@ -123,26 +185,14 @@ tUART * Init_DMA_UART(const struct device *uart_dev)
 
     k_msgq_init(&UART->TX_Queue, UART->Queue_Storage, sizeof(void*), UART->Queue_Length);
     k_sem_init(&UART->TX_Done_Sem, 0, 1);
-    k_mutex_init(&UART->RX_Mutex);
+    /* RX spinlock is statically zeroed; no init required */
 
     /* start the UART worker thread */
     k_thread_create(&UART->Thread, UART->Thread_Stack, UART->Thread_Stack_Size,
                     UART_Thread_Entry, UART, NULL, NULL,
                     K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), 0, K_NO_WAIT);
 
-    /* Set up async callback and enable rx */
-    int rc = uart_callback_set(uart_dev, uart_cb, UART);
-    if (rc) {
-        LOG_ERR("Init_DMA_UART: uart_callback_set failed: %d", rc);
-        /* We keep UART object, but RX won't work */
-    } else {
-        /* Ensure RX_Tmp buffer exists inside tUART and is persistent (not stack) */
-        rc = uart_rx_enable(uart_dev, UART->RX_Tmp, sizeof(UART->RX_Tmp), K_FOREVER);
-        if (rc) {
-            LOG_ERR("Init_DMA_UART: uart_rx_enable failed: %d", rc);
-            /* continue — TX side still works */
-        }
-    }
+    /* Polling mode: no async callback registration. Poll thread will use uart_poll_in. */
 
     return UART;
 }
@@ -157,50 +207,62 @@ tUART * Init_DMA_UART(const struct device *uart_dev)
 * @returns: tUART struct initialized and malloc-ed
 * */
 tUART * Init_SUDO_UART(void (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), void (*Receive_Func_Ptr)(tUART*, uint8_t*, uint16_t*)){
-   tUART * UART = (tUART*)k_calloc(1, sizeof(tUART));
-   if (UART == NULL){
-       LOG_ERR("Init_SUDO_UART: malloc failed");
-       return NULL;
-   }
+    tUART * UART = (tUART*)k_calloc(1, sizeof(tUART));
+    if (UART == NULL) {
+        LOG_ERR("Init_SUDO_UART: malloc failed");
+        return NULL;
+    }
 
-   UART->UART_Handle = NULL;
-   UART->Use_DMA = false;
-   UART->UART_Enabled = true;
-   UART->TX_Buffer = NULL;
-   UART->Currently_Transmitting = false;
-   UART->RX_Buff_Head_Idx = 0;
-   UART->RX_Buff_Tail_Idx = 0;
+    UART->UART_Handle = NULL;
+    UART->Use_DMA = false;
+    UART->UART_Enabled = true;
+    UART->TX_Buffer = NULL;
+    UART->Currently_Transmitting = false;
+    /* legacy ring indices removed; RX now uses k_pipe */
 
-   /* Allocate SUDO handler context */
-   UART->SUDO_Handler = (SUDO_UART *)k_calloc(1, sizeof(SUDO_UART));
-   if(UART->SUDO_Handler == NULL){
-       k_free(UART);
-       return NULL;
-   }
-   UART->SUDO_Handler->SUDO_Transmit = Transmit_Func_Ptr;
-   UART->SUDO_Handler->SUDO_Receive  = Receive_Func_Ptr;
+    /* Allocate SUDO handler context */
+    UART->SUDO_Handler = (SUDO_UART *)k_calloc(1, sizeof(SUDO_UART));
+    if (UART->SUDO_Handler == NULL) {
+        k_free(UART);
+        return NULL;
+    }
+    UART->SUDO_Handler->SUDO_Transmit = Transmit_Func_Ptr;
+    UART->SUDO_Handler->SUDO_Receive  = Receive_Func_Ptr;
 
-   /* Create Zephyr primitives similar to DMA UART */
-   UART->Thread_Stack_Size = K_THREAD_STACK_SIZEOF(UART->Thread_Stack);
+    /* allocate per-instance pipe storage and init pipe */
+    UART->RX_Pipe_Storage = k_calloc(UART_RX_BUFF_SIZE, 1);
+    if (UART->RX_Pipe_Storage) {
+        UART->RX_Pipe_Size = UART_RX_BUFF_SIZE;
+        k_pipe_init(&UART->RX_Pipe, UART->RX_Pipe_Storage, UART->RX_Pipe_Size);
+    } else {
+        UART->RX_Pipe_Size = 0;
+    }
 
-   UART->Queue_Length = 16;
-   UART->Queue_Storage = k_calloc(UART->Queue_Length, sizeof(void*));
-   if(UART->Queue_Storage == NULL){
-       k_free(UART->SUDO_Handler);
-       k_free(UART);
-       LOG_ERR("Init_SUDO_UART: queue storage malloc failed");
-       return NULL;
-   }
+    /* Register */
+    if (g_uart_registry_count < UART_REGISTRY_MAX) {
+        g_uart_registry[g_uart_registry_count++] = UART;
+    }
 
-   k_msgq_init(&UART->TX_Queue, UART->Queue_Storage, sizeof(void*), UART->Queue_Length);
-   k_sem_init(&UART->TX_Done_Sem, 0, 1);
-   k_mutex_init(&UART->RX_Mutex);
+    /* Create Zephyr primitives similar to DMA UART */
+    UART->Thread_Stack_Size = K_THREAD_STACK_SIZEOF(UART->Thread_Stack);
 
-   k_thread_create(&UART->Thread, UART->Thread_Stack, UART->Thread_Stack_Size,
-                   UART_Thread_Entry, UART, NULL, NULL,
-                   K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), 0, K_NO_WAIT);
+    UART->Queue_Length = 16;
+    UART->Queue_Storage = k_calloc(UART->Queue_Length, sizeof(void*));
+    if (UART->Queue_Storage == NULL) {
+        k_free(UART->SUDO_Handler);
+        k_free(UART);
+        LOG_ERR("Init_SUDO_UART: queue storage malloc failed");
+        return NULL;
+    }
 
-   return UART;
+    k_msgq_init(&UART->TX_Queue, UART->Queue_Storage, sizeof(void*), UART->Queue_Length);
+    k_sem_init(&UART->TX_Done_Sem, 0, 1);
+
+    k_thread_create(&UART->Thread, UART->Thread_Stack, UART->Thread_Stack_Size,
+                    UART_Thread_Entry, UART, NULL, NULL,
+                    K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), 0, K_NO_WAIT);
+
+    return UART;
 }
 
 /**
@@ -284,16 +346,9 @@ void Enable_UART(tUART * UART){
        ; /* No MSP init in Zephyr */
    UART->TX_Buffer = NULL;
    UART->Currently_Transmitting = false;
-   UART->RX_Buff_Head_Idx = 0;
-   UART->RX_Buff_Tail_Idx = 0;
    UART->UART_Enabled = true;
 
-   if(UART->UART_Handle){
-       int rc = uart_rx_enable(UART->UART_Handle, UART->RX_Tmp, sizeof(UART->RX_Tmp), K_FOREVER);
-       if (rc) {
-           LOG_ERR("Enable_UART: uart_rx_enable failed: %d", rc);
-       }
-   }
+    /* RX is handled by poll thread; no uart_rx_enable in polling mode */
 }
 
 /**
@@ -427,16 +482,23 @@ void UART_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size){
     *Data_Size = 0;
     if (!UART || !UART->UART_Enabled)
         return;
+    unsigned int key = k_spin_lock(&UART->RX_Spinlock);
 
-    k_mutex_lock(&UART->RX_Mutex, K_FOREVER);
-    while (UART->RX_Buff_Tail_Idx != UART->RX_Buff_Head_Idx){
-        Data[*Data_Size] = UART->RX_Buffer[UART->RX_Buff_Tail_Idx++];
-        if (UART->RX_Buff_Tail_Idx >= UART_RX_BUFF_SIZE)
-            UART->RX_Buff_Tail_Idx = 0;
-        (*Data_Size)++;
+    if (UART->RX_Pipe_Size == 0) {
+        k_spin_unlock(&UART->RX_Spinlock, key);
+        return; /* pipe not initialized */
     }
 
-    k_mutex_unlock(&UART->RX_Mutex);
+    size_t bytes_copied = 0;
+    /* read up to buffer size */
+    int rc = k_pipe_read(&UART->RX_Pipe, Data, UART_RX_BUFF_SIZE, &bytes_copied, 1, K_NO_WAIT);
+    if (rc == 0 || bytes_copied > 0) {
+        *Data_Size = (uint16_t)bytes_copied;
+    } else {
+        *Data_Size = 0;
+    }
+
+    k_spin_unlock(&UART->RX_Spinlock, key);
 }
 
 int8_t UART_SUDO_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size){
@@ -457,7 +519,11 @@ void Modify_UART_Baudrate(tUART * UART, int32_t New_Baudrate){
 
     /* disable RX while we reconfigure */
     uart_rx_disable(dev);
-    UART->RX_Buff_Tail_Idx = 0;
+
+#ifndef __ZEPHYR__
+    /* static-checker fallback: opaque uart_config declaration */
+    struct uart_config { int baudrate; };
+#endif
 
     struct uart_config cfg;
     int rc = uart_config_get(dev, &cfg);
@@ -473,11 +539,7 @@ void Modify_UART_Baudrate(tUART * UART, int32_t New_Baudrate){
         }
     }
 
-    /* re-enable RX */
-    rc = uart_rx_enable(dev, UART->RX_Tmp, sizeof(UART->RX_Tmp), K_FOREVER);
-    if (rc) {
-        LOG_ERR("Modify_UART_Baudrate: uart_rx_enable failed: %d", rc);
-    }
+    /* RX re-enabled implicitly by poll thread; no uart_rx_enable needed */
 }
 
 
