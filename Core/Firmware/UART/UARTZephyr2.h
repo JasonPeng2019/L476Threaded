@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "../../Middlewares/Queue/queuezephyr.h"
 
 #ifndef UART_RX_BUFF_SIZE
 #define UART_RX_BUFF_SIZE 512
@@ -68,6 +69,7 @@ typedef struct tUART_s {
 } tUART;
 
 void Init_UART_CallBack_Queue(void);
+void Cleanup_UART_CallBack_Queue(void);
 tUART * Init_DMA_UART(const struct device * uart_dev);
 tUART * Init_SUDO_UART(void (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), void (*Receive_Func_Ptr)(tUART*, uint8_t*, uint16_t*));
 void Enable_UART(tUART * UART);
@@ -75,3 +77,6 @@ void Disable_UART(tUART * UART);
 void UART_Delete(tUART * UART);
 int8_t UART_Add_Transmit(tUART * UART, uint8_t * Data, uint16_t Data_Size);
 void UART_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size);
+int8_t UART_SUDO_Receive(tUART * UART, uint8_t * Data, uint16_t * Data_Size);
+void UART_Flush_TX(tUART * uart);
+void Modify_UART_Baudrate(tUART * UART, int32_t New_Baudrate);

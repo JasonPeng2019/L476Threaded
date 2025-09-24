@@ -47,7 +47,7 @@ static struct k_mutex g_polling_init_lock;
 static void UART_Thread_Entry(void *p1, void *p2, void *p3);
 
 // Everything needed for polling (hopefully)
-static void * g_uart_event_queue = NULL; // Need to write a proper queue with peeking
+static Queue * g_uart_event_queue = NULL; // Using queuezephyr for proper thread-safe queue with peeking
 static struct k_work poll_work;
 static struct k_timer poll_timer;
 static struct k_poll_signal g_poll_signal;
@@ -66,8 +66,12 @@ static void uart_poll_timer_handler(struct k_timer *timer){ ARG_UNUSED(timer); }
 static void uart_poll_work_handler(struct k_work *work)
 {
     ARG_UNUSED(work);
-    static void *token = (void*)1;
-    if (g_uart_event_queue) queue_put(g_uart_event_queue, token);
+    static int token = 1;
+    if (g_uart_event_queue) {
+        if (!Enqueue(g_uart_event_queue, &token, sizeof(token))) {
+            LOG_WRN("uart_poll_work_handler: Failed to enqueue event token");
+        }
+    }
     k_poll_signal_raise(&g_poll_signal, 0);
 }
 
@@ -76,7 +80,11 @@ void Init_UART_CallBack_Queue(void){
     g_uart_registry_count = 0;
     k_mutex_init(&g_uart_registry_lock);
     k_mutex_init(&g_polling_init_lock);
-    g_uart_event_queue = queue_init(); // Assuming queue is init this way
+    g_uart_event_queue = Prep_Queue(); // Initialize queue using queuezephyr
+    if (!g_uart_event_queue) {
+        LOG_ERR("Init_UART_CallBack_Queue: Failed to initialize event queue");
+        return;
+    }
     k_work_init(&poll_work, uart_poll_work_handler);
     k_timer_init(&poll_timer, poll_timer_handler, NULL);
     k_poll_signal_init(&g_poll_signal);
@@ -103,9 +111,10 @@ static void uart_poll_thread(void *p1, void *p2, void *p3)
     while (1) {
         k_poll_event_init(&kevent, K_POLL_TYPE_SIGNAL, K_POLL_MODE_NOTIFY_ONLY, &g_poll_signal);
         k_poll(&kevent, 1, K_FOREVER);
-        while (g_uart_event_queue && queue_peek(g_uart_event_queue) != NULL) {
-            void *tok = queue_get(g_uart_event_queue);
-            ARG_UNUSED(tok);
+        while (g_uart_event_queue && Queue_Size(g_uart_event_queue) > 0) {
+            size_t tok_size;
+            void *tok = Dequeue(g_uart_event_queue, &tok_size);
+            if (tok) k_free(tok); // Free the allocated token data
 
             if (k_mutex_lock(&g_uart_registry_lock, K_FOREVER) == 0) {
                 for (size_t i = 0; i < g_uart_registry_count; ++i) {
@@ -129,6 +138,22 @@ static void uart_poll_thread(void *p1, void *p2, void *p3)
                 k_mutex_unlock(&g_uart_registry_lock);
             }
         }
+    }
+}
+
+void Cleanup_UART_CallBack_Queue(void) {
+    if (k_mutex_lock(&g_polling_init_lock, K_FOREVER) == 0) {
+        if (g_polling_started) {
+            k_timer_stop(&poll_timer);
+            k_thread_abort(&uart_poll_thread_data);
+            g_polling_started = false;
+        }
+        k_mutex_unlock(&g_polling_init_lock);
+    }
+
+    if (g_uart_event_queue) {
+        Free_Queue(g_uart_event_queue);
+        g_uart_event_queue = NULL;
     }
 }
 
@@ -169,7 +194,7 @@ static void UART_Thread_Entry(void *p1, void *p2, void *p3)
        UART->Currently_Transmitting = true;
        if(UART->Use_DMA && UART->UART_Handle != NULL)
        {
-           int rc = uart_tx(UART->UART_Handle, UART->TX_Buffer->Data, UART->TX_Buffer->Data_Size, SYS_FOREVER_MS);
+           int rc = uart_tx(UART->UART_Handle, UART->TX_Buffer->Data, UART->TX_Buffer->Data_Size, K_FOREVER);
            if (rc == 0) {
                /* Wait for callback to signal completion */
                k_sem_take(&UART->TX_Done_Sem, K_FOREVER);
