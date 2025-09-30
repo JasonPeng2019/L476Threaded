@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "../../Middlewares/Queue/queuezephyr.h"
+#include "../../../../nordic/src/includes/zrtos.h"
 
 #ifndef UART_RX_BUFF_SIZE
 #define UART_RX_BUFF_SIZE 512
@@ -20,12 +21,7 @@
 #define MAX_TX_BUFF_SIZE 2048
 #endif
 
-struct k_pipe;
-struct k_msgq;
-struct k_sem;
-struct k_thread;
 struct device;
-struct k_mutex;
 
 typedef struct {
     uint8_t * Data;
@@ -45,23 +41,23 @@ typedef struct tUART_s {
     bool Use_DMA;
     bool UART_Enabled;
 
-    struct k_pipe RX_Pipe;
+    z_pipe_t RX_Pipe;
     uint8_t * RX_Pipe_Storage;
     size_t RX_Pipe_Size;
 
-    struct k_msgq TX_Queue;
+    z_msgq_t TX_Queue;
     void * Queue_Storage;
     size_t Queue_Length;
 
     TX_Node * TX_Buffer;
     bool Currently_Transmitting;
 
-    struct k_sem TX_Done_Sem;
+    z_sem_t TX_Done_Sem;
 
     /* per-instance mutex to protect state (UART_Enabled, Currently_Transmitting, etc.) */
-    struct k_mutex state_mutex;
+    z_mutex_t state_mutex;
 
-    struct k_thread Thread;
+    z_thread_t Thread;
     uint8_t Thread_Stack[512];
     size_t Thread_Stack_Size;
 
