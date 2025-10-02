@@ -9,18 +9,18 @@
  #include "queuezephyr.h"
 #include <string.h>
 
-/* Dynamic allocation helpers using Zephyr allocation APIs */
+/* Dynamic allocation helpers using wrapper allocation APIs */
 static Node *Create_Node(void *data, size_t data_size) {
-    Node *node = (Node *)k_malloc(sizeof(Node));
+    Node *node = (Node *)malloc(sizeof(Node));
     if (!node) {
         return NULL;
     }
     memset(node, 0, sizeof(Node));
 
     if (data && data_size > 0) {
-        node->Data = k_malloc(data_size);
+        node->Data = malloc(data_size);
         if (!node->Data) {
-            k_free(node);
+            free(node);
             return NULL;
         }
         memcpy(node->Data, data, data_size);
@@ -36,15 +36,15 @@ static Node *Create_Node(void *data, size_t data_size) {
 static bool Free_Node(Node *node) {
     if (!node) return true;
     if (node->Data) {
-        k_free(node->Data);
+        free(node->Data);
     }
-    k_free(node);
+    free(node);
     return true;
 }
 
 /* Initialize a dynamically-allocated queue. Allocates a mutex for the queue. */
 Queue *Prep_Queue(void) {
-    Queue *que = (Queue *)k_malloc(sizeof(Queue));
+    Queue *que = (Queue *)malloc(sizeof(Queue));
     if (!que) return NULL;
 
     /* Initialize fields individually to avoid zeroing mutex */
@@ -52,13 +52,13 @@ Queue *Prep_Queue(void) {
     que->Tail = NULL;
     que->Size = 0;
     /* Initialize embedded mutex and point Lock at it by default */
-    k_mutex_init(&que->LockObj);
+    mutex_init(&que->LockObj);
     que->Lock = &que->LockObj;
     return que;
 }
 
 /* Initialize a statically-allocated queue that uses a pre-allocated mutex */
-void Queue_Init_Static(Queue *que, struct k_mutex *mutex) {
+void Queue_Init_Static(Queue *que, z_mutex_t *mutex) {
     if (!que) return;
     que->Head = NULL;
     que->Tail = NULL;
@@ -68,7 +68,7 @@ void Queue_Init_Static(Queue *que, struct k_mutex *mutex) {
         que->Lock = mutex;
         } else {
         /* Initialize the embedded mutex */
-        k_mutex_init(&que->LockObj);
+        mutex_init(&que->LockObj);
         que->Lock = &que->LockObj;
         }
 }
@@ -79,7 +79,7 @@ void Queue_Init(Queue *que) {
     que->Head = NULL;
     que->Tail = NULL;
     que->Size = 0;
-    k_mutex_init(&que->LockObj);
+    mutex_init(&que->LockObj);
     que->Lock = &que->LockObj;
 }
  
@@ -99,7 +99,7 @@ bool Enqueue(Queue *que, void *data, size_t data_size) {
     if (!node) return false;
 
     if (que->Lock) {
-        k_mutex_lock(que->Lock, K_FOREVER);
+        mutex_lock(que->Lock, -1);
     }
 
     /* The queue is protected by the lock we just acquired, so it's safe to proceed */
@@ -114,7 +114,7 @@ bool Enqueue(Queue *que, void *data, size_t data_size) {
     que->Size++;
 
     if (que->Lock) {
-        k_mutex_unlock(que->Lock);
+        mutex_unlock(que->Lock);
     }
     return true;
 }
@@ -133,11 +133,11 @@ void *Dequeue(Queue *que, size_t *data_size) {
     }
 
     if (que->Lock) {
-        k_mutex_lock(que->Lock, K_FOREVER);
+        mutex_lock(que->Lock, -1);
     }
 
     if (que->Size == 0) {
-        if (que->Lock) k_mutex_unlock(que->Lock);
+        if (que->Lock) mutex_unlock(que->Lock);
         if (data_size) *data_size = 0;
         return NULL;
     }
@@ -149,13 +149,13 @@ void *Dequeue(Queue *que, size_t *data_size) {
     que->Head = node->Next;
     if (--que->Size == 0) que->Tail = NULL;
 
-    if (que->Lock) k_mutex_unlock(que->Lock);
+    if (que->Lock) mutex_unlock(que->Lock);
 
     if (data_size) *data_size = size;
 
     /* Clear node data pointer to prevent double-free, then free node */
     node->Data = NULL;
-    k_free(node);
+    free(node);
     return data;
 }
  
@@ -170,7 +170,7 @@ bool Dequeue_Free(Queue *que) {
     size_t data_size;
     void *data = Dequeue(que, &data_size);
     if (!data) return false;
-    k_free(data);
+    free(data);
     return true;
 }
  
@@ -185,10 +185,10 @@ bool Dequeue_Free(Queue *que) {
 bool Queue_Peek(Queue *que, uint32_t index, void *dest_buffer, size_t buffer_size, size_t *actual_size) {
     if (!que || !dest_buffer) return false;
 
-    if (que->Lock) k_mutex_lock(que->Lock, K_FOREVER);
+    if (que->Lock) mutex_lock(que->Lock, -1);
 
     if (index >= que->Size) {
-        if (que->Lock) k_mutex_unlock(que->Lock);
+        if (que->Lock) mutex_unlock(que->Lock);
         return false;
     }
 
@@ -196,7 +196,7 @@ bool Queue_Peek(Queue *que, uint32_t index, void *dest_buffer, size_t buffer_siz
     for (uint32_t i = 0; i < index; ++i) {
         if (!trav || !trav->Next) {
             /* Queue was modified during traversal - should not happen with proper locking */
-            if (que->Lock) k_mutex_unlock(que->Lock);
+            if (que->Lock) mutex_unlock(que->Lock);
             return false;
         }
         trav = trav->Next;
@@ -204,7 +204,7 @@ bool Queue_Peek(Queue *que, uint32_t index, void *dest_buffer, size_t buffer_siz
 
     if (!trav) {
         /* Node is NULL - queue was corrupted */
-        if (que->Lock) k_mutex_unlock(que->Lock);
+        if (que->Lock) mutex_unlock(que->Lock);
         return false;
     }
 
@@ -213,7 +213,7 @@ bool Queue_Peek(Queue *que, uint32_t index, void *dest_buffer, size_t buffer_siz
     }
 
     if (trav->DataSize > buffer_size) {
-        if (que->Lock) k_mutex_unlock(que->Lock);
+        if (que->Lock) mutex_unlock(que->Lock);
         return false;  /* Buffer too small */
     }
 
@@ -221,7 +221,7 @@ bool Queue_Peek(Queue *que, uint32_t index, void *dest_buffer, size_t buffer_siz
         memcpy(dest_buffer, trav->Data, trav->DataSize);
     }
 
-    if (que->Lock) k_mutex_unlock(que->Lock);
+    if (que->Lock) mutex_unlock(que->Lock);
     return true;
 }
 
@@ -235,10 +235,10 @@ bool Queue_Peek(Queue *que, uint32_t index, void *dest_buffer, size_t buffer_siz
 size_t Queue_Peek_Size(Queue *que, uint32_t index) {
     if (!que) return 0;
 
-    if (que->Lock) k_mutex_lock(que->Lock, K_FOREVER);
+    if (que->Lock) mutex_lock(que->Lock, -1);
 
     if (index >= que->Size) {
-        if (que->Lock) k_mutex_unlock(que->Lock);
+        if (que->Lock) mutex_unlock(que->Lock);
         return 0;
     }
 
@@ -246,7 +246,7 @@ size_t Queue_Peek_Size(Queue *que, uint32_t index) {
     for (uint32_t i = 0; i < index; ++i) {
         if (!trav || !trav->Next) {
             /* Queue was modified during traversal - should not happen with proper locking */
-            if (que->Lock) k_mutex_unlock(que->Lock);
+            if (que->Lock) mutex_unlock(que->Lock);
             return 0;
         }
         trav = trav->Next;
@@ -254,13 +254,13 @@ size_t Queue_Peek_Size(Queue *que, uint32_t index) {
 
     if (!trav) {
         /* Node is NULL - queue was corrupted */
-        if (que->Lock) k_mutex_unlock(que->Lock);
+        if (que->Lock) mutex_unlock(que->Lock);
         return 0;
     }
 
     size_t size = trav->DataSize;
 
-    if (que->Lock) k_mutex_unlock(que->Lock);
+    if (que->Lock) mutex_unlock(que->Lock);
     return size;
 }
  
@@ -281,7 +281,7 @@ bool Free_Queue(Queue *que) {
     }
 
     /* Embedded mutex (LockObj) is freed with the queue structure itself */
-    k_free(que);
+    free(que);
     return true;
 }
  
@@ -339,9 +339,9 @@ Node *Queue_Node_Peek_Unsafe(Queue *que, uint32_t index) {
 uint32_t Queue_Size(Queue *que) {
     if (!que) return 0;
 
-    if (que->Lock) k_mutex_lock(que->Lock, K_FOREVER);
+    if (que->Lock) mutex_lock(que->Lock, -1);
     uint32_t size = que->Size;
-    if (que->Lock) k_mutex_unlock(que->Lock);
+    if (que->Lock) mutex_unlock(que->Lock);
 
     return size;
 }
@@ -353,7 +353,7 @@ uint32_t Queue_Size(Queue *que) {
  *
  * @return: pointer to the queue's mutex, or NULL if queue is NULL
  */
-struct k_mutex *Queue_Get_Mutex(Queue *que) {
+z_mutex_t *Queue_Get_Mutex(Queue *que) {
     if (!que) return NULL;
     return que->Lock;
 }

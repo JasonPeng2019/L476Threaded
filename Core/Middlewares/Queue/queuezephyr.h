@@ -28,15 +28,9 @@ extern "C" {
 
 
 #include "middlewares_includes.h"
-#include <zephyr/kernel.h>
-#include <zephyr/sys/printk.h>
-#include <zephyr/sys/util.h>
+#include "includes/zrtos.h"
 
-#ifndef K_FOREVER
-#define K_FOREVER (-1)
-#endif
-
-#define QUEUE_MUTEX_DEFINE(name) K_MUTEX_DEFINE(name)
+#define QUEUE_MUTEX_DEFINE(name) Z_MUTEX_DEFINE(name)
 
 typedef struct Node {
 	void * Data;
@@ -51,14 +45,14 @@ typedef struct Queue {
 	/* Internal mutex object (embedded). Use Queue_Init or Prep_Queue to
 	 * initialize. `Lock` points to the active mutex (either &LockObj or an
 	 * externally-supplied mutex). */
-	struct k_mutex LockObj;
-	struct k_mutex *Lock; /* pointer to mutex: allows static or external mutex */
+	z_mutex_t LockObj;
+	z_mutex_t *Lock; /* pointer to mutex: allows static or external mutex */
 } Queue;
 
 /* Queue allocation and initialization */
 Queue * Prep_Queue(void);  /* Allocates and initializes a new queue */
 void Queue_Init(Queue *que);
-void Queue_Init_Static(Queue *que, struct k_mutex *mutex);
+void Queue_Init_Static(Queue *que, z_mutex_t *mutex);
 
 /* Core queue operations (thread-safe) */
 bool Enqueue(Queue * que, void * data, size_t data_size);  /* Add data copy to rear */
@@ -82,7 +76,7 @@ bool Free_Queue(Queue * que);  /* Free queue and all contained data */
  * thread context; mutex APIs must not be called from ISRs. If ISR access is
  * required, use an ISR-safe primitive such as k_fifo/k_msgq instead.
  */
-struct k_mutex * Queue_Get_Mutex(Queue * que);
+z_mutex_t * Queue_Get_Mutex(Queue * que);
 
 #ifdef __cplusplus
 }
