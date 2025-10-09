@@ -62,6 +62,13 @@ typedef struct tUART_s {
     size_t Thread_Stack_Size;
 
     SUDO_UART * SUDO_Handler;
+
+    /* DMA RX buffers - double buffering for async UART */
+    uint8_t * DMA_RX_Buf[2];
+    size_t DMA_RX_Buf_Size;
+
+    /* Flag for 0.5s notification - ISR sets when data arrives and is copied to RX_Pipe */
+    volatile bool New_Data_Available;
 } tUART;
 
 void Init_UART_CallBack_Queue(void);

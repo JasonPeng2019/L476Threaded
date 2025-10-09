@@ -62,7 +62,69 @@ static void uart_poll_work_handler(struct k_work *work);
 static void poll_timer_handler(struct k_timer *timer){ ARG_UNUSED(timer); k_work_submit(&poll_work); }
 static void uart_poll_thread(void *p1, void *p2, void *p3);
 static void uart_poll_timer_handler(struct k_timer *timer){ ARG_UNUSED(timer); }
+static void uart_async_callback(const struct device *dev, struct uart_event *evt, void *user_data);
 
+/* UART async callback - handles DMA completion events */
+static void uart_async_callback(const struct device *dev, struct uart_event *evt, void *user_data)
+{
+    ARG_UNUSED(dev);
+    tUART *uart = (tUART *)user_data;
+    if (!uart) return;
+
+    switch (evt->type) {
+    case UART_RX_RDY:
+        /* DMA has received data - copy immediately to RX_Pipe (ISR-safe) */
+        {
+            uint8_t *src = evt->data.rx.buf + evt->data.rx.offset;
+            size_t bytes_written;
+
+            /* k_pipe_put is ISR-safe with K_NO_WAIT */
+            int rc = pipe_put(&uart->RX_Pipe, src, evt->data.rx.len,
+                             &bytes_written, 1, K_NO_WAIT);
+
+            if (rc == 0 && bytes_written == evt->data.rx.len) {
+                /* Data copied successfully - set flag for 0.5s notification */
+                uart->New_Data_Available = true;
+            } else {
+                /* Pipe full or error - data lost */
+                LOG_WRN("UART RX pipe full in ISR - data lost");
+            }
+        }
+        break;
+
+    case UART_RX_BUF_REQUEST:
+        /* DMA requesting next buffer - provide it for continuous streaming */
+        {
+            /* Alternate between buffers */
+            static uint8_t next_buf_idx = 1;
+            uart_rx_buf_rsp(dev, uart->DMA_RX_Buf[next_buf_idx], uart->DMA_RX_Buf_Size);
+            next_buf_idx = (next_buf_idx + 1) % 2;
+        }
+        break;
+
+    case UART_RX_BUF_RELEASED:
+        /* Buffer released by DMA - no action needed (data already copied) */
+        break;
+
+    case UART_RX_DISABLED:
+        /* RX disabled event */
+        LOG_DBG("UART RX disabled");
+        break;
+
+    case UART_TX_DONE:
+        /* TX DMA complete - signal semaphore */
+        sem_give(&uart->TX_Done_Sem);
+        break;
+
+    case UART_TX_ABORTED:
+        LOG_WRN("UART TX aborted");
+        sem_give(&uart->TX_Done_Sem);
+        break;
+
+    default:
+        break;
+    }
+}
 
 static void uart_poll_work_handler(struct k_work *work)
 {
@@ -98,7 +160,7 @@ void Init_UART_CallBack_Queue(void){
             k_thread_create(&uart_poll_thread_data, uart_poll_stack, UART_POLL_STACK_SIZE,
                             uart_poll_thread, NULL, NULL, NULL,
                             K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), K_ESSENTIAL, K_NO_WAIT);
-            k_timer_start(&poll_timer, K_MSEC(10), K_MSEC(10));
+            k_timer_start(&poll_timer, K_MSEC(500), K_MSEC(500));
             g_polling_started = true;
         }
         mutex_unlock(&g_polling_init_lock);
@@ -124,13 +186,32 @@ static void uart_poll_thread(void *p1, void *p2, void *p3)
 
                     /* Try to lock this UART's state mutex with no wait to avoid blocking */
                     if (mutex_lock(&u->state_mutex, 0) == 0) {
-                        if (u->UART_Handle && u->UART_Enabled) {
-                            uint8_t ch;
-                            while (uart_poll_in(u->UART_Handle, &ch) == 0) {
-                                size_t bytes_written = 0;
-                                int rc = pipe_put(&u->RX_Pipe, &ch, 1, &bytes_written, 0);
-                                ARG_UNUSED(rc);
-                                ARG_UNUSED(bytes_written);
+                        if (u->UART_Enabled) {
+                            /* DMA UARTs: check if new data arrived in last 0.5s */
+                            if (u->Use_DMA && u->DMA_RX_Buf[0]) {
+                                /* ISR already copied data to RX_Pipe - just check flag for notification */
+                                if (u->New_Data_Available) {
+                                    /* Data was received in last 0.5s interval */
+                                    LOG_DBG("UART data received in last 0.5s (already in RX_Pipe)");
+
+                                    /* Clear flag for next 0.5s interval */
+                                    u->New_Data_Available = false;
+
+                                    /* Optional: Signal application that data is available
+                                     * Application can read from RX_Pipe via UART_Receive() */
+                                } else {
+                                    LOG_DBG("No new UART data in last 0.5s interval");
+                                }
+                            }
+                            /* Non-DMA UARTs (SUDO): fall back to polling hardware FIFO */
+                            else if (!u->Use_DMA && u->UART_Handle) {
+                                uint8_t ch;
+                                while (uart_poll_in(u->UART_Handle, &ch) == 0) {
+                                    size_t bytes_written = 0;
+                                    int rc = pipe_put(&u->RX_Pipe, &ch, 1, &bytes_written, 0);
+                                    ARG_UNUSED(rc);
+                                    ARG_UNUSED(bytes_written);
+                                }
                             }
                         }
                         mutex_unlock(&u->state_mutex);
@@ -249,12 +330,31 @@ tUART * Init_DMA_UART(const struct device * uart_dev)
         UART->RX_Pipe_Size = 0;
     }
 
+    /* Allocate DMA RX buffers for double buffering */
+    UART->DMA_RX_Buf_Size = UART_RX_BUFF_SIZE;
+    UART->DMA_RX_Buf[0] = (uint8_t *)k_calloc(1, UART->DMA_RX_Buf_Size);
+    UART->DMA_RX_Buf[1] = (uint8_t *)k_calloc(1, UART->DMA_RX_Buf_Size);
+
+    /* Initialize notification flag for 0.5s polling */
+    UART->New_Data_Available = false;
+
+    if (!UART->DMA_RX_Buf[0] || !UART->DMA_RX_Buf[1]) {
+        LOG_ERR("Init_DMA_UART: DMA buffer allocation failed");
+        if (UART->DMA_RX_Buf[0]) k_free(UART->DMA_RX_Buf[0]);
+        if (UART->DMA_RX_Buf[1]) k_free(UART->DMA_RX_Buf[1]);
+        if (UART->RX_Pipe_Storage) k_free(UART->RX_Pipe_Storage);
+        k_free(UART);
+        return NULL;
+    }
+
     UART->Thread_Stack_Size = sizeof(UART->Thread_Stack);
 
     UART->Queue_Length = 16;
     UART->Queue_Storage = k_calloc(UART->Queue_Length, sizeof(void*));
     if (UART->Queue_Storage == NULL) {
         LOG_ERR("Init_DMA_UART: Queue memory allocation failed");
+        if (UART->DMA_RX_Buf[0]) k_free(UART->DMA_RX_Buf[0]);
+        if (UART->DMA_RX_Buf[1]) k_free(UART->DMA_RX_Buf[1]);
         if (UART->RX_Pipe_Storage) k_free(UART->RX_Pipe_Storage);
         k_free(UART);
         return NULL;
@@ -268,14 +368,43 @@ tUART * Init_DMA_UART(const struct device * uart_dev)
                     K_PRIO_PREEMPT(CONFIG_UARTTHREADED_THREAD_PRIORITY), 0, K_NO_WAIT);
     UART->Thread.tid = &UART->Thread.thread;
 
+    /* Set up async UART callback */
+    int rc = uart_callback_set(uart_dev, uart_async_callback, UART);
+    if (rc != 0) {
+        LOG_ERR("Init_DMA_UART: uart_callback_set failed: %d", rc);
+        thread_abort(&UART->Thread);
+        if (UART->Queue_Storage) k_free(UART->Queue_Storage);
+        if (UART->DMA_RX_Buf[0]) k_free(UART->DMA_RX_Buf[0]);
+        if (UART->DMA_RX_Buf[1]) k_free(UART->DMA_RX_Buf[1]);
+        if (UART->RX_Pipe_Storage) k_free(UART->RX_Pipe_Storage);
+        k_free(UART);
+        return NULL;
+    }
+
+    /* Enable async RX with first buffer */
+    rc = uart_rx_enable(uart_dev, UART->DMA_RX_Buf[0], UART->DMA_RX_Buf_Size, SYS_FOREVER_US);
+    if (rc != 0) {
+        LOG_ERR("Init_DMA_UART: uart_rx_enable failed: %d", rc);
+        thread_abort(&UART->Thread);
+        if (UART->Queue_Storage) k_free(UART->Queue_Storage);
+        if (UART->DMA_RX_Buf[0]) k_free(UART->DMA_RX_Buf[0]);
+        if (UART->DMA_RX_Buf[1]) k_free(UART->DMA_RX_Buf[1]);
+        if (UART->RX_Pipe_Storage) k_free(UART->RX_Pipe_Storage);
+        k_free(UART);
+        return NULL;
+    }
+
     if (mutex_lock(&g_uart_registry_lock, -1) == 0) {
         if (g_uart_registry_count < UART_REGISTRY_MAX) {
             g_uart_registry[g_uart_registry_count++] = UART;
         } else {
             LOG_ERR("Init_DMA_UART: Maximum UART instances reached (post-init)");
             mutex_unlock(&g_uart_registry_lock);
+            uart_rx_disable(uart_dev);
             thread_abort(&UART->Thread);
             if (UART->Queue_Storage) k_free(UART->Queue_Storage);
+            if (UART->DMA_RX_Buf[0]) k_free(UART->DMA_RX_Buf[0]);
+            if (UART->DMA_RX_Buf[1]) k_free(UART->DMA_RX_Buf[1]);
             if (UART->RX_Pipe_Storage) k_free(UART->RX_Pipe_Storage);
             k_free(UART);
             return NULL;
@@ -315,6 +444,12 @@ tUART * Init_SUDO_UART(void (*Transmit_Func_Ptr)(tUART*, uint8_t*, uint16_t), vo
     } else {
         UART->RX_Pipe_Size = 0;
     }
+
+    /* SUDO UARTs don't use DMA buffers - initialize to NULL */
+    UART->DMA_RX_Buf[0] = NULL;
+    UART->DMA_RX_Buf[1] = NULL;
+    UART->DMA_RX_Buf_Size = 0;
+    UART->New_Data_Available = false;
 
     UART->Thread_Stack_Size = sizeof(UART->Thread_Stack);
 
@@ -361,6 +496,20 @@ void Enable_UART(tUART * UART){
          UART->TX_Buffer = NULL;
          UART->Currently_Transmitting = false;
          UART->UART_Enabled = true;
+
+         /* Re-enable async RX for DMA UARTs */
+         if (UART->Use_DMA && UART->UART_Handle && UART->DMA_RX_Buf[0]) {
+             /* Reset notification flag */
+             UART->New_Data_Available = false;
+
+             /* Re-enable async RX with first buffer */
+             int rc = uart_rx_enable(UART->UART_Handle, UART->DMA_RX_Buf[0],
+                                     UART->DMA_RX_Buf_Size, SYS_FOREVER_US);
+             if (rc != 0) {
+                 LOG_ERR("Enable_UART: uart_rx_enable failed: %d", rc);
+             }
+         }
+
          mutex_unlock(&UART->state_mutex);
     }
 }
@@ -426,6 +575,10 @@ void UART_Delete(tUART * UART){
         if(UART->SUDO_Handler) k_free(UART->SUDO_Handler);
 
         if (UART->RX_Pipe_Storage) k_free(UART->RX_Pipe_Storage);
+
+        /* Free DMA RX buffers if allocated */
+        if (UART->DMA_RX_Buf[0]) k_free(UART->DMA_RX_Buf[0]);
+        if (UART->DMA_RX_Buf[1]) k_free(UART->DMA_RX_Buf[1]);
 
         /* release instance mutex and free the struct */
         mutex_unlock(&UART->state_mutex);
