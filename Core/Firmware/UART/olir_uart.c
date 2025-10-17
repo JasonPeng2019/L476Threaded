@@ -4,6 +4,9 @@
 #include <sys/ring_buffer.h>
 #include <sys/printk.h>
 
+// Include wrappers
+#include "zrtos.h"
+
 #define UART_DEVICE_NAME DT_LABEL(DT_NODELABEL(uart0))
 #define RING_BUF_SIZE 1024
 #define RX_BUF_SIZE 64
@@ -22,7 +25,8 @@ K_THREAD_STACK_DEFINE(poll_thread_stack, THREAD_STACK_SIZE);
 static struct k_thread dma_thread_data;
 static struct k_thread poll_thread_data;
 
-static struct k_sem tx_done_sem;
+static struct z_sem_t z_tx_done_sem;
+
 const struct device *console_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 int data_ready = false;
 
@@ -52,10 +56,10 @@ static void uart_callback(const struct device *dev, struct uart_event *evt, void
         uart_rx_buf_rsp(uart_dev, rx_buf, RX_BUF_SIZE);
         break;
     case UART_TX_DONE:
-        k_sem_give(&tx_done_sem);
+        sem_give(&z_tx_done_sem);
         break;
     case UART_TX_ABORTED:
-        k_sem_give(&tx_done_sem);
+        sem_give(&z_tx_done_sem);
         break;
     default:
         break;
@@ -70,7 +74,7 @@ static void uart_async_init(void)
         return;
     }
 
-    k_sem_init(&tx_done_sem, 0, 1);
+    sem_init(&z_tx_done_sem, 0, 1);
     uart_callback_set(uart_dev, uart_callback, NULL);
     uart_rx_enable(uart_dev, rx_buf, RX_BUF_SIZE, 50);
 }
@@ -118,7 +122,7 @@ int uart_async_send_data(const uint8_t *data, size_t len) {
         printk("uart_tx failed: %d\n", ret);
         return ret;
     }
-    k_sem_take(&tx_done_sem, K_FOREVER);
+    sem_take(&z_tx_done_sem, K_FOREVER);
     return 0;
 }
 
