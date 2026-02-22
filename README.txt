@@ -44,13 +44,7 @@ To do: start UART_Repeat_Task and repeathandlestruct
 
 // repeatedly calls the recieve function. Look at how abraham on his version makes the thing
     // cancel itself / switch itself off after executing one time, and take inspiration?
-    // -> do leetcode, do data learning and hop on project once every 3 days
-    // -> move to ex-palantir and gather those connections
-    // -> do entrepernuership at palantir with Justin's referral
-    // trying to move into a data role as opposed to SWE. -> text Justin
-    // is backend knowledge needed?
-    // move to backend with Justin; have him teach me, work with him, etc.
-    // ask vaibhav to move onto the project
+    /
 
 
 
