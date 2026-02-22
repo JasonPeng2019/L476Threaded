@@ -38,12 +38,6 @@ otherwise no way to distinguish
  * need to turn on device when pinged.
 
 
-Headhunters:
-
-Justin
-- staff engineer Palantir for backend development
-- any ex palantir 
-
 
 To do: start UART_Repeat_Task and repeathandlestruct
 
